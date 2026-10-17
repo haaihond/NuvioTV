@@ -7,6 +7,14 @@ import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.plugin.PluginManager
 import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.core.tmdb.TmdbService
+import com.nuvio.tv.core.usenet.BuiltInUsenetService
+import com.nuvio.tv.core.usenet.BuiltInUsenetResult
+import com.nuvio.tv.core.usenet.UsenetProvider
+import com.nuvio.tv.core.usenet.UsenetIndexer
+import com.nuvio.tv.core.usenet.UsenetSort
+import com.nuvio.tv.core.usenet.UsenetSourceConfiguration
+import com.nuvio.tv.core.usenet.UsenetSourceSettings
+import com.nuvio.tv.data.mediaserver.ServerStreamSource
 import com.nuvio.tv.data.local.DebridSettingsDataStore
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.dto.StreamDto
@@ -17,6 +25,7 @@ import com.nuvio.tv.domain.model.AddonStreams
 import com.nuvio.tv.domain.model.DebridSettings
 import com.nuvio.tv.domain.model.RepositoryType
 import com.nuvio.tv.domain.model.ScraperInfo
+import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.repository.AddonRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -26,6 +35,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -122,7 +134,57 @@ class StreamRepositoryPluginIsolationTest {
         coVerify(exactly = 0) { harness.addonRepository.fetchAddon(any()) }
     }
 
-    private fun newHarness(enabledScrapers: List<ScraperInfo>): Harness {
+    @Test fun `built in and server sources complete without addons and replace sorted incremental results`() = runTest {
+        val source = MutableStateFlow(UsenetSourceConfiguration(enabled = true,
+            providers = listOf(UsenetProvider(name = "News", host = "news.test")),
+            indexers = listOf(UsenetIndexer(name = "Indexer", apiUrl = "https://indexer.test/api"))))
+        fun stream(title: String) = Stream(name = title, title = title, description = null,
+            url = null, ytId = null, infoHash = null, fileIdx = null, externalUrl = null, behaviorHints = null,
+            addonName = BuiltInUsenetService.GROUP_NAME, addonLogo = null, nzbUrl = "https://indexer.test/$title",
+            servers = listOf("nntps://news.test:563/20"))
+        val low = stream("720p")
+        val high = stream("2160p")
+        var searches = 0
+        val results = flow {
+            searches++
+            emit(BuiltInUsenetResult(group = AddonStreams(BuiltInUsenetService.GROUP_NAME, null, listOf(low))))
+            emit(BuiltInUsenetResult(group = AddonStreams(BuiltInUsenetService.GROUP_NAME, null, listOf(high))))
+        }
+        val serverStream = low.copy(addonName = "Server", url = "https://server.test/video", nzbUrl = null)
+        val serverSource = ServerStreamSource("Server", preferred = false) {
+            kotlinx.coroutines.yield()
+            listOf(serverStream)
+        }
+        val harness = newHarness(emptyList(), source, results, emptyList(), listOf(serverSource))
+        suspend fun load() = harness.repository.getStreamsFromAllAddons("movie", "tt123", null, null).toList()
+        val last = (load().last() as NetworkResult.Success).data
+        assertEquals(setOf(BuiltInUsenetService.GROUP_NAME, "Server"), last.map { it.addonName }.toSet())
+        assertEquals(listOf(high), last.single { it.addonName == BuiltInUsenetService.GROUP_NAME }.streams)
+        assertEquals(listOf(serverStream), last.single { it.addonName == "Server" }.streams)
+        load()
+        assertEquals(1, searches)
+        source.value = source.value.copy(sort = UsenetSort.NEWEST)
+        load()
+        assertEquals(2, searches)
+        coVerify(exactly = 0) { harness.api.getStreams(any()) }
+    }
+
+    @Test fun `failing built in search does not cancel addon results`() = runTest {
+        val source = MutableStateFlow(UsenetSourceConfiguration(enabled = true,
+            providers = listOf(UsenetProvider(name = "News", host = "news.test")),
+            indexers = listOf(UsenetIndexer(name = "Indexer", apiUrl = "https://indexer.test/api"))))
+        val harness = newHarness(emptyList(), source, flow { throw IllegalStateException("secret-api-key") })
+        val success = harness.repository.getStreamsFromAllAddons("movie", "tt123", null, null).toList()
+            .last() as NetworkResult.Success
+        assertEquals(listOf("Fast Addon"), success.data.map { it.addonName })
+    }
+
+    private fun newHarness(enabledScrapers: List<ScraperInfo>,
+        sources: MutableStateFlow<UsenetSourceConfiguration> = MutableStateFlow(UsenetSourceConfiguration()),
+        usenetResults: Flow<BuiltInUsenetResult> = emptyFlow(),
+        addons: List<Addon> = listOf(compatibleAddon()),
+        serverSources: List<ServerStreamSource> = emptyList()
+    ): Harness {
         val addon = compatibleAddon()
         val api = mockk<AddonApi>()
         coEvery { api.getStreams(any()) } returns Response.success(
@@ -137,7 +199,7 @@ class StreamRepositoryPluginIsolationTest {
         )
 
         val addonRepository = mockk<AddonRepository>()
-        every { addonRepository.getInstalledAddons() } returns flowOf(listOf(addon))
+        every { addonRepository.getInstalledAddons() } returns flowOf(addons)
         coEvery { addonRepository.fetchAddon(addon.baseUrl) } returns NetworkResult.Success(addon)
 
         val pluginManager = mockk<PluginManager>(relaxed = true)
@@ -175,10 +237,16 @@ class StreamRepositoryPluginIsolationTest {
                 tmdbService = tmdbService,
                 debridStreamPresentation = presentation,
                 localDebridAvailabilityService = availability,
+                usenetSourceSettings = mockk<UsenetSourceSettings> {
+                    every { read(any()) } answers { sources.value }
+                },
+                builtInUsenetService = mockk<BuiltInUsenetService> {
+                    every { search(any(), any(), any(), any(), any()) } returns usenetResults
+                },
                 serverStreams = mockk {
                     every { isNativeRequest(any()) } returns false
                     every { revision } returns 0
-                    every { sources(any(), any(), any(), any(), any()) } returns emptyList()
+                    every { sources(any(), any(), any(), any(), any()) } returns serverSources
                 }
             ),
             api = api,
