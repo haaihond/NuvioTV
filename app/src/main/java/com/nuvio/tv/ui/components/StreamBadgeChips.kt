@@ -101,8 +101,11 @@ fun StreamBadgeChips(
     modifier: Modifier = Modifier
 ) {
     val imageBadges = remember(badges) { badges.filter { it.imageURL.isNotBlank() } }
+    val labelBadges = remember(badges) {
+        badges.filter { it.imageURL.isBlank() && it.name.isNotBlank() && it.tagStyle == StreamBadge.STYLE_LABEL }
+    }
     val sizeBytes = fileSizeBytes.takeIf { showFileSizeBadge }
-    if (imageBadges.isEmpty() && sizeBytes == null) return
+    if (imageBadges.isEmpty() && labelBadges.isEmpty() && sizeBytes == null) return
 
     val chipAlpha = if (animate) {
         val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -127,6 +130,9 @@ fun StreamBadgeChips(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xs)
         ) {
+            labelBadges.forEach { badge ->
+                StreamLabelBadgeChip(badge = badge)
+            }
             imageBadges.forEach { badge ->
                 StreamImportedBadgeChip(badge = badge)
             }
@@ -168,8 +174,31 @@ private fun StreamFileSizeBadge(bytes: Long) {
     }
 }
 
+/** A source's own badge: its name on its colour, shaped as the file size badge. */
 @Composable
-private fun StreamImportedBadgeChip(badge: StreamBadge, crossfade: Boolean = false) {
+private fun StreamLabelBadgeChip(badge: StreamBadge) {
+    val background = remember(badge.tagColor) { badge.tagColor.toBadgeColorOrNull() ?: Color(0xFF0A0C0C) }
+    val text = remember(badge.textColor) { badge.textColor.toBadgeColorOrNull() ?: Color.White }
+    val border = remember(badge.borderColor) { badge.borderColor.toBadgeColorOrNull() ?: background }
+    Box(
+        modifier = Modifier
+            .height(20.dp)
+            .clip(BadgeChipShape)
+            .background(background, BadgeChipShape)
+            .border(NuvioTheme.spacing.hairline, border, BadgeChipShape)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = badge.name,
+            style = MaterialTheme.typography.labelSmall,
+            color = text
+        )
+    }
+}
+
+@Composable
+internal fun StreamImportedBadgeChip(badge: StreamBadge, crossfade: Boolean = false) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val backgroundColor = remember(badge.tagColor, badge.tagStyle) {
