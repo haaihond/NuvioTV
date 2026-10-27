@@ -5,6 +5,11 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [dev]
   workflow_dispatch:
+    inputs:
+      publish_test_release:
+        description: Publish a public test APK prerelease (built-in-usenet-sources only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,7 +75,12 @@ jobs:
         run: python3 native/usenet/scripts/check_prebuilts.py
 
       - name: Test updater and Usenet and build fullDebug APK
-        run: ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.updater.*' --tests '*Usenet*' --tests 'com.nuvio.tv.core.player.StreamFallbackSessionTest' :app:assembleFullDebug --stacktrace
+        run: ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.updater.*' --tests '*Usenet*' --tests 'com.nuvio.tv.core.player.StreamFallbackSessionTest' :app:assembleFullDebug -Pkotlin.compiler.execution.strategy=in-process --max-workers=2 --stacktrace
+
+      - name: Verify APK signature
+        run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$build_tools/apksigner" verify --verbose app/build/outputs/apk/full/debug/app-full-universal-debug.apk
 
       - name: Upload fullDebug APK
         uses: actions/upload-artifact@v7
@@ -79,3 +89,45 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 7
+
+  publish-test-release:
+    name: Publish public test APK
+    needs: full-debug-build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release && github.ref == 'refs/heads/built-in-usenet-sources'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download verified APK
+        uses: actions/download-artifact@v8
+        with:
+          name: app-full-universal-debug.apk
+          skip-decompress: true
+
+      - name: Publish test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="NuvioTV-built-in-usenet-sources-${GITHUB_SHA:0:9}-universal-debug.apk"
+          mv app-full-universal-debug.apk "$apk"
+          sha256sum "$apk" > SHA256SUMS.txt
+          tag="test-usenet-${GITHUB_SHA:0:9}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' \
+            'Test build of built-in Usenet providers, indexers, and native Usenet sorting.' \
+            '' \
+            "Source: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+            "Build and tests: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '' \
+            'Universal APK for Android 7 or newer. Installs as Nuvio Debug alongside production.' \
+            'Signed with a temporary CI debug key. Updating a previous debug install may require uninstalling it first, which clears its local data.' \
+            'Updater and Usenet unit tests and APK signature verification passed. Physical-device playback has not been verified.' \
+            > release-notes.md
+          gh release create "$tag" "$apk" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease --latest=false \
+            --title "Usenet test build (${GITHUB_SHA:0:9})" \
+            --notes-file release-notes.md
+          printf '[Download test APK](https://github.com/%s/releases/download/%s/%s)\n' \
+            "$GITHUB_REPOSITORY" "$tag" "$apk" >> "$GITHUB_STEP_SUMMARY"
