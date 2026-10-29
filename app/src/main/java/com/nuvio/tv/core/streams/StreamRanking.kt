@@ -335,7 +335,7 @@ class StreamRankingEngine(val profile: StreamRankingProfile) {
     companion object {
         const val GIB = 1073741824.0
         private val NUMERIC_FIELDS = setOf(StreamRankingField.SIZE_GB, StreamRankingField.AGE_DAYS, StreamRankingField.RESOLUTION)
-        /** Source quality, best highest; unknown has none. Usenet's simple sort orders sources the same way. */
+        /** Source quality, best highest; unknown has none. Usenet's priority order sorts sources the same way. */
         internal val QUALITY_VALUES = mapOf(StreamReleaseQuality.REMUX to 7, StreamReleaseQuality.BLURAY to 6,
             StreamReleaseQuality.WEB_DL to 5, StreamReleaseQuality.WEBRIP to 4, StreamReleaseQuality.HDTV to 3,
             StreamReleaseQuality.DVD to 2, StreamReleaseQuality.CAM to 1)

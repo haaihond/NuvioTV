@@ -46,8 +46,8 @@ import kotlinx.serialization.Serializable
 @Serializable internal data class RankingPreview(val results: List<RankingPreviewRow>, val excluded: List<String>, val profile: StreamRankingProfile)
 
 internal object UsenetRankingPhone {
-    /** A native equivalent of the simple sort's steps, for editing/previewing an existing setup. */
-    fun original(steps: List<UsenetSortStep>) = StreamRankingProfile(name = "Simple sort", topPerBucket = 0,
+    /** A native equivalent of the priority order's steps, for editing/previewing an existing setup. */
+    fun original(steps: List<UsenetSortStep>) = StreamRankingProfile(name = "Priority order", topPerBucket = 0,
         sort = steps.filter { it.enabled }.map { step ->
             when (step.key) {
                 UsenetSortKey.RESOLUTION -> StreamRankingSort(StreamRankingKey.RESOLUTION)

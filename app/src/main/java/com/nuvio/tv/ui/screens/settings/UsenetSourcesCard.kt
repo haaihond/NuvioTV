@@ -355,7 +355,7 @@ private fun <T> List<T>.moved(position: Int, delta: Int): List<T> = toMutableLis
 private enum class SizeOrder { LARGEST, SMALLEST, OFF }
 
 /**
- * The simple sort's criteria in their order, numbered while on, with the addon list's reorder
+ * The priority order's criteria in their order, numbered while on, with the addon list's reorder
  * buttons. Size opens its direction; the others switch on and off, but the last one on stays on.
  */
 @Composable

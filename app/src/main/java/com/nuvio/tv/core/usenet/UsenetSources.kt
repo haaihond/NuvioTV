@@ -99,7 +99,7 @@ enum class UsenetSort { QUALITY, LARGEST, SMALLEST, NEWEST, INDEXER }
 enum class UsenetSortKey { RESOLUTION, SOURCE, SIZE, INDEXER, AGE }
 
 /**
- * One step of the simple sort. Each enabled step only orders the releases the steps above it left
+ * One step of the priority order. Each enabled step only orders the releases the steps above it left
  * tied. [descending] is the size direction, largest first; the other keys have one direction.
  */
 @Serializable
@@ -147,7 +147,7 @@ data class UsenetSourceConfiguration(
     fun normalized() = copy(providers = providers.sortedBy { it.priority }, indexers = indexers.sortedBy { it.priority })
 
     /**
-     * The simple sort's steps, every key once. Settings saved before steps existed keep their order:
+     * The priority order's steps, every key once. Settings saved before steps existed keep their order:
      * [sort] first, then the tie-breakers it was followed by (indexer priority, resolution, largest
      * size), then the keys it lacked, which only order releases of exactly the same size.
      */
