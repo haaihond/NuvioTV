@@ -1,8 +1,24 @@
 # Native Usenet sorting profiles
 
 Choose **Settings → Usenet → Search results → Sorting profile**. Existing installations start
-on **Current sorting**, preserving their previous sort order. Selecting a profile does not replace
+on **Simple sort**, preserving their previous sort order. Selecting a profile does not replace
 providers, indexers, search limits or the saved custom profile.
+
+## Simple sort
+
+**Simple sort** orders results by a list of criteria edited on the TV: **Resolution** (highest
+first), **Source** (remux, Blu-ray, WEB-DL, WEBRip, then HDTV), **Size** (largest or smallest
+first), **Indexer priority** (the indexer list's order) and **Date** (newest first). Each criterion
+can be switched off and moved up or down with the same buttons as the addon list; at least one
+stays on. Results follow the first criterion that is on, and each one below only orders the
+releases still tied, then the release name. Unknown values come last in either direction. Size
+and date seldom tie, so criteria below them rarely change the order. Releases that played or
+failed keep their place above and below the others, as with the profiles.
+
+Settings saved before the criteria existed show the order their single sort gave: that sort
+first, then indexer priority, resolution and largest size, as before, with Source and Date after
+them. Those two only order releases of exactly the same size. The phone page previews the same
+order but edits it only on the TV.
 
 These profiles apply only to results from Nuvio's **built-in NNTP providers and Newznab indexers**.
 Addon results (including addon-supplied NZBs), debrid sources, plugins and media-server streams keep
@@ -18,7 +34,7 @@ their existing order. There is no global stream sorting hook.
 The TV and phone both offer an optional **Preferred language** picker for these four presets.
 Tagged matches lead before quality and size; other languages and unlabelled releases remain eligible.
 The preference survives preset changes. **No language preference** restores the preset's standard order.
-**Current sorting** ignores this preference and **Custom profile** uses its own languages and sorting
+**Simple sort** ignores this preference and **Custom profile** uses its own languages and sorting
 priorities. Choosing either preserves the quick preference for the next time a built-in preset is used.
 
 These sizes are preferences: larger releases remain selectable. Existing minimum-resolution,

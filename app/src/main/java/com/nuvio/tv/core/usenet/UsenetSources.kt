@@ -91,8 +91,19 @@ data class UsenetIndexer(
     override fun toString() = "UsenetIndexer(id=$id, enabled=$enabled)"
 }
 
+/** The single sort of settings saved before the sort had steps; see [UsenetSourceConfiguration.sortSteps]. */
 @Serializable
 enum class UsenetSort { QUALITY, LARGEST, SMALLEST, NEWEST, INDEXER }
+
+@Serializable
+enum class UsenetSortKey { RESOLUTION, SOURCE, SIZE, INDEXER, AGE }
+
+/**
+ * One step of the simple sort. Each enabled step only orders the releases the steps above it left
+ * tied. [descending] is the size direction, largest first; the other keys have one direction.
+ */
+@Serializable
+data class UsenetSortStep(val key: UsenetSortKey, val enabled: Boolean = true, val descending: Boolean = true)
 
 @Serializable
 data class UsenetSourceConfiguration(
@@ -100,6 +111,8 @@ data class UsenetSourceConfiguration(
     val providers: List<UsenetProvider> = emptyList(),
     val indexers: List<UsenetIndexer> = emptyList(),
     val sort: UsenetSort = UsenetSort.QUALITY,
+    /** Null until the steps are edited: [sort] still gives them. See [sortSteps]. */
+    val sortOrder: List<UsenetSortStep>? = null,
     /** Missing in existing settings: retain their exact ordering until a profile is chosen. */
     val ranking: StreamRankingSettings = StreamRankingSettings(),
     val minResolution: Int = 0,
@@ -133,8 +146,27 @@ data class UsenetSourceConfiguration(
     /** List order is the hierarchy: by priority, then by the user's order within a priority. */
     fun normalized() = copy(providers = providers.sortedBy { it.priority }, indexers = indexers.sortedBy { it.priority })
 
+    /**
+     * The simple sort's steps, every key once. Settings saved before steps existed keep their order:
+     * [sort] first, then the tie-breakers it was followed by (indexer priority, resolution, largest
+     * size), then the keys it lacked, which only order releases of exactly the same size.
+     */
+    fun sortSteps(): List<UsenetSortStep> {
+        val saved = sortOrder ?: listOf(when (sort) {
+            UsenetSort.QUALITY -> UsenetSortStep(UsenetSortKey.RESOLUTION)
+            UsenetSort.LARGEST -> UsenetSortStep(UsenetSortKey.SIZE)
+            UsenetSort.SMALLEST -> UsenetSortStep(UsenetSortKey.SIZE, descending = false)
+            UsenetSort.NEWEST -> UsenetSortStep(UsenetSortKey.AGE)
+            UsenetSort.INDEXER -> UsenetSortStep(UsenetSortKey.INDEXER)
+        }, UsenetSortStep(UsenetSortKey.INDEXER), UsenetSortStep(UsenetSortKey.RESOLUTION), UsenetSortStep(UsenetSortKey.SIZE))
+        return (saved + UsenetSortKey.entries.map { UsenetSortStep(it) }).distinctBy { it.key }
+    }
+
     fun validate() {
         ranking.validate()
+        require(sortOrder == null || sortOrder.map { it.key }.distinct().size == sortOrder.size && sortOrder.any { it.enabled }) {
+            "Keep one sort step, each key once"
+        }
         require(providers.size <= 64 && indexers.size <= 20) { "Too many providers or indexers" }
         require(providers.map { it.id }.distinct().size == providers.size)
         require(indexers.map { it.id }.distinct().size == indexers.size)

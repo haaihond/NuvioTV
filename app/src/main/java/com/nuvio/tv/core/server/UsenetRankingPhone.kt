@@ -1,7 +1,8 @@
 package com.nuvio.tv.core.server
 
 import com.nuvio.tv.core.streams.*
-import com.nuvio.tv.core.usenet.UsenetSort
+import com.nuvio.tv.core.usenet.UsenetSortKey
+import com.nuvio.tv.core.usenet.UsenetSortStep
 import kotlinx.serialization.Serializable
 
 @Serializable internal data class PhoneRankingPreset(
@@ -45,19 +46,17 @@ import kotlinx.serialization.Serializable
 @Serializable internal data class RankingPreview(val results: List<RankingPreviewRow>, val excluded: List<String>, val profile: StreamRankingProfile)
 
 internal object UsenetRankingPhone {
-    /** A native equivalent of the original comparator, for editing/previewing an existing setup. */
-    fun original(sort: UsenetSort): StreamRankingProfile {
-        val primary = when (sort) {
-            UsenetSort.QUALITY -> StreamRankingSort(StreamRankingKey.RESOLUTION)
-            UsenetSort.LARGEST -> StreamRankingSort(StreamRankingKey.SIZE)
-            UsenetSort.SMALLEST -> StreamRankingSort(StreamRankingKey.SIZE, false)
-            UsenetSort.NEWEST -> StreamRankingSort(StreamRankingKey.AGE)
-            UsenetSort.INDEXER -> StreamRankingSort(StreamRankingKey.INDEXER)
-        }
-        return StreamRankingProfile(name = "Current sorting", topPerBucket = 0,
-            sort = (listOf(primary, StreamRankingSort(StreamRankingKey.INDEXER), StreamRankingSort(StreamRankingKey.RESOLUTION),
-                StreamRankingSort(StreamRankingKey.SIZE))).distinctBy { it.key })
-    }
+    /** A native equivalent of the simple sort's steps, for editing/previewing an existing setup. */
+    fun original(steps: List<UsenetSortStep>) = StreamRankingProfile(name = "Simple sort", topPerBucket = 0,
+        sort = steps.filter { it.enabled }.map { step ->
+            when (step.key) {
+                UsenetSortKey.RESOLUTION -> StreamRankingSort(StreamRankingKey.RESOLUTION)
+                UsenetSortKey.SOURCE -> StreamRankingSort(StreamRankingKey.QUALITY)
+                UsenetSortKey.SIZE -> StreamRankingSort(StreamRankingKey.SIZE, step.descending)
+                UsenetSortKey.INDEXER -> StreamRankingSort(StreamRankingKey.INDEXER)
+                UsenetSortKey.AGE -> StreamRankingSort(StreamRankingKey.AGE)
+            }
+        })
     fun preview(request: RankingPreviewRequest, original: StreamRankingProfile,
         indexerOrder: Map<String, Int> = emptyMap()): RankingPreview {
         request.validate()

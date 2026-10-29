@@ -1,6 +1,7 @@
 package com.nuvio.tv.core.usenet
 
 import com.nuvio.tv.core.streams.StreamRankingCandidate
+import com.nuvio.tv.core.streams.StreamRankingEngine
 import com.nuvio.tv.core.streams.StreamRankingEngines
 import com.nuvio.tv.core.streams.StreamRankingFacts
 import com.nuvio.tv.core.streams.StreamRankingField
@@ -450,18 +451,18 @@ object NewznabProtocol {
             }
             return StreamRankingEngines.get(profile).rank(candidates, now).take(config.maxResults).map { it.candidate.value }
         }
-        val primary = when (config.sort) {
-            UsenetSort.QUALITY -> compareByDescending<UsenetRelease> { it.resolution }
-            UsenetSort.LARGEST -> compareByDescending<UsenetRelease> { it.episodeSize(seasonEpisodes) }
-            UsenetSort.SMALLEST -> compareBy<UsenetRelease> {
-                it.episodeSize(seasonEpisodes).takeIf { size -> size > 0 } ?: Long.MAX_VALUE
-            }
-            UsenetSort.NEWEST -> compareByDescending<UsenetRelease> { it.publishedAt }
-            UsenetSort.INDEXER -> compareBy<UsenetRelease> { priority[it.indexerId] ?: Int.MAX_VALUE }
+        // Each enabled step orders what the steps above left tied. Unknown values come last either way.
+        val order = config.sortSteps().filter { it.enabled }.fold(compareBy(rank)) { order, step ->
+            order.then(when (step.key) {
+                UsenetSortKey.RESOLUTION -> compareByDescending<UsenetRelease> { it.resolution }
+                UsenetSortKey.SOURCE -> compareByDescending<UsenetRelease> { StreamRankingEngine.QUALITY_VALUES[it.rankingFacts.quality] ?: 0 }
+                UsenetSortKey.SIZE -> if (step.descending) compareByDescending<UsenetRelease> { it.episodeSize(seasonEpisodes) }
+                    else compareBy<UsenetRelease> { it.episodeSize(seasonEpisodes).takeIf { size -> size > 0 } ?: Long.MAX_VALUE }
+                UsenetSortKey.INDEXER -> compareBy<UsenetRelease> { priority[it.indexerId] ?: Int.MAX_VALUE }
+                UsenetSortKey.AGE -> compareByDescending<UsenetRelease> { it.publishedAt }
+            })
         }
-        return filtered.sortedWith(compareBy(rank).then(primary).thenBy { priority[it.indexerId] ?: Int.MAX_VALUE }
-            .thenByDescending { it.resolution }.thenByDescending { it.episodeSize(seasonEpisodes) }.thenBy { it.title }.thenBy { it.nzbUrl })
-            .distinctBy { it.nzbUrl }.take(config.maxResults)
+        return filtered.sortedWith(order.thenBy { it.title }.thenBy { it.nzbUrl }).distinctBy { it.nzbUrl }.take(config.maxResults)
     }
 
     private fun document(xml: String): Element {

@@ -91,7 +91,7 @@ class UsenetSourcesConfigServer(
             Triple(StreamRankingPreset.SMALLER_FILES, R.string.usenet_ranking_smaller, R.string.usenet_ranking_smaller_desc),
             Triple(StreamRankingPreset.HD_SDR, R.string.usenet_ranking_hd_sdr, R.string.usenet_ranking_hd_sdr_desc)
         ).map { (id, name, description) -> PhoneRankingPreset(id, text(name), text(description),
-            if (id == StreamRankingPreset.ORIGINAL) UsenetRankingPhone.original(configuration.sort) else StreamRankingPresets.profile(id)) }
+            if (id == StreamRankingPreset.ORIGINAL) UsenetRankingPhone.original(configuration.sortSteps()) else StreamRankingPresets.profile(id)) }
         val languages = listOf(PhoneRankingLanguage("", text(R.string.usenet_ranking_any_language))) +
             StreamRankingPresets.languages.map { code -> PhoneRankingLanguage(code, when (code) {
                 "multi" -> text(R.string.usenet_ranking_multi_audio)
@@ -99,7 +99,7 @@ class UsenetSourcesConfigServer(
                 else -> java.util.Locale.forLanguageTag(code).getDisplayLanguage(java.util.Locale.getDefault())
             }) }
         return ok(json.encodeToString(PhoneRanking(configuration.ranking,
-            configuration.ranking.profile() ?: UsenetRankingPhone.original(configuration.sort), presets, languages)))
+            configuration.ranking.profile() ?: UsenetRankingPhone.original(configuration.sortSteps()), presets, languages)))
     }
 
     private fun saveRanking(body: String): Response {
@@ -115,7 +115,7 @@ class UsenetSourcesConfigServer(
         val input = parse<RankingPreviewRequest>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_ranking_invalid)
         val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
         return try {
-            ok(json.encodeToString(UsenetRankingPhone.preview(input, UsenetRankingPhone.original(configuration.sort),
+            ok(json.encodeToString(UsenetRankingPhone.preview(input, UsenetRankingPhone.original(configuration.sortSteps()),
                 configuration.indexers.withIndex().groupBy { it.value.name.lowercase(java.util.Locale.ROOT) }
                     .mapValues { (_, entries) -> entries.minOf { it.index } })))
         } catch (e: IllegalArgumentException) { invalidRanking(e) }

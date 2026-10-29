@@ -1565,8 +1565,9 @@ private fun AddonEnabledToggle(
     }
 }
 
+/** Up and down buttons beside a list row; the Usenet sort steps reuse them. */
 @Composable
-private fun AddonReorderButtons(
+internal fun AddonReorderButtons(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onMoveUp: () -> Unit,

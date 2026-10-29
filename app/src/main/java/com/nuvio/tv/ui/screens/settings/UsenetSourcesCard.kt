@@ -4,6 +4,7 @@ package com.nuvio.tv.ui.screens.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -12,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
@@ -45,6 +47,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import com.nuvio.tv.ui.components.NuvioDialog
+import com.nuvio.tv.ui.screens.addon.AddonReorderButtons
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -85,13 +88,18 @@ internal fun UsenetSourcesCard(
     var indexer by remember { mutableStateOf<UsenetIndexer?>(null) }
     var picker by remember { mutableStateOf<String?>(null) }
     var selectedId by remember { mutableStateOf<String?>(null) }
-    val sortOptions = listOf(
-        SettingsPickerOption(UsenetSort.QUALITY, stringResource(R.string.usenet_sort_quality)),
-        SettingsPickerOption(UsenetSort.LARGEST, stringResource(R.string.usenet_sort_largest)),
-        SettingsPickerOption(UsenetSort.SMALLEST, stringResource(R.string.usenet_sort_smallest)),
-        SettingsPickerOption(UsenetSort.NEWEST, stringResource(R.string.usenet_sort_newest)),
-        SettingsPickerOption(UsenetSort.INDEXER, stringResource(R.string.usenet_sort_indexer))
+    val sortSteps = configuration.sortSteps()
+    val sizeStep = sortSteps.first { it.key == UsenetSortKey.SIZE }
+    val sizeOptions = listOf(
+        SettingsPickerOption(SizeOrder.LARGEST, stringResource(R.string.usenet_sort_largest)),
+        SettingsPickerOption(SizeOrder.SMALLEST, stringResource(R.string.usenet_sort_smallest)),
+        SettingsPickerOption(SizeOrder.OFF, stringResource(R.string.usenet_sort_off))
     )
+    val sizeOrder = when {
+        !sizeStep.enabled -> SizeOrder.OFF
+        sizeStep.descending -> SizeOrder.LARGEST
+        else -> SizeOrder.SMALLEST
+    }
     val rankingOptions = listOf(
         SettingsPickerOption(StreamRankingPreset.ORIGINAL, stringResource(R.string.usenet_ranking_original)),
         SettingsPickerOption(StreamRankingPreset.BALANCED, stringResource(R.string.usenet_ranking_balanced)),
@@ -174,8 +182,8 @@ internal fun UsenetSourcesCard(
                 subtitle = stringResource(R.string.usenet_ranking_phone_desc),
                 onClick = { phoneEntry = rankingPhoneRow; setUpFromPhone() }, modifier = Modifier.focusRequester(rankingPhoneRow))
             if (configuration.ranking.preset == StreamRankingPreset.ORIGINAL) {
-                SettingsActionRow(title = stringResource(R.string.usenet_sort_results), subtitle = null,
-                    value = sortOptions.first { it.value == configuration.sort }.title, onClick = { picker = "sort" })
+                UsenetSortSteps(sortSteps, sizeValue = sizeOptions.first { it.value == sizeOrder }.title,
+                    onChange = { update(configuration.copy(sortOrder = it)) }, onSize = { picker = "sortSize" })
             }
             SettingsActionRow(title = stringResource(R.string.usenet_min_resolution), subtitle = null,
                 value = if (configuration.minResolution == 0) unlimited else "${configuration.minResolution}p",
@@ -212,9 +220,16 @@ internal fun UsenetSourcesCard(
             selectedValue = configuration.ranking.preset,
             onOptionSelected = { update(configuration.copy(ranking = configuration.ranking.copy(preset = it))); picker = null },
             onDismiss = { picker = null })
-        "sort" -> SettingsSingleChoiceDialog(title = stringResource(R.string.usenet_sort_results), options = sortOptions,
-            selectedValue = configuration.sort, onOptionSelected = { update(configuration.copy(sort = it)); picker = null },
-            onDismiss = { picker = null })
+        "sortSize" -> SettingsSingleChoiceDialog(title = stringResource(R.string.usenet_sort_size), options = sizeOptions,
+            selectedValue = sizeOrder, onOptionSelected = { order ->
+                val step = UsenetSortStep(UsenetSortKey.SIZE, enabled = order != SizeOrder.OFF,
+                    descending = if (order == SizeOrder.OFF) sizeStep.descending else order == SizeOrder.LARGEST)
+                // The last criterion that is on stays on.
+                if (step.enabled || sortSteps.any { it.enabled && it.key != UsenetSortKey.SIZE }) {
+                    update(configuration.copy(sortOrder = sortSteps.map { if (it.key == UsenetSortKey.SIZE) step else it }))
+                }
+                picker = null
+            }, onDismiss = { picker = null })
         "resolution", "size", "age", "limit" -> {
             val key = picker
             val values = when (key) {
@@ -335,6 +350,49 @@ private fun sourcesSummary(count: Int, enabled: Int, @PluralsRes plural: Int): S
 
 private fun <T> List<T>.moved(position: Int, delta: Int): List<T> = toMutableList().apply {
     val item = removeAt(position); add(position + delta, item)
+}
+
+private enum class SizeOrder { LARGEST, SMALLEST, OFF }
+
+/**
+ * The simple sort's criteria in their order, numbered while on, with the addon list's reorder
+ * buttons. Size opens its direction; the others switch on and off, but the last one on stays on.
+ */
+@Composable
+private fun UsenetSortSteps(steps: List<UsenetSortStep>, sizeValue: String, onChange: (List<UsenetSortStep>) -> Unit,
+    onSize: () -> Unit) {
+    SettingsNote(stringResource(R.string.usenet_sort_steps_hint))
+    var number = 0
+    steps.forEachIndexed { i, step ->
+        val title = (if (step.enabled) "${++number}. " else "") + stringResource(when (step.key) {
+            UsenetSortKey.RESOLUTION -> R.string.usenet_sort_resolution
+            UsenetSortKey.SOURCE -> R.string.usenet_sort_source
+            UsenetSortKey.SIZE -> R.string.usenet_sort_size
+            UsenetSortKey.INDEXER -> R.string.usenet_sort_indexer
+            UsenetSortKey.AGE -> R.string.usenet_sort_date
+        })
+        // Keyed by criterion, so a moved row keeps the focus of the button that moved it.
+        key(step.key) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (step.key == UsenetSortKey.SIZE) {
+                    SettingsActionRow(title = title, subtitle = null, value = sizeValue, onClick = onSize, modifier = Modifier.weight(1f))
+                } else {
+                    SettingsToggleRow(title = title, subtitle = stringResource(when (step.key) {
+                        UsenetSortKey.RESOLUTION -> R.string.usenet_sort_resolution_desc
+                        UsenetSortKey.SOURCE -> R.string.usenet_sort_source_desc
+                        UsenetSortKey.INDEXER -> R.string.usenet_sort_indexer_desc
+                        else -> R.string.usenet_sort_newest
+                    }), checked = step.enabled, modifier = Modifier.weight(1f), onToggle = {
+                        if (!step.enabled || steps.count { it.enabled } > 1) {
+                            onChange(steps.map { if (it.key == step.key) it.copy(enabled = !it.enabled) else it })
+                        }
+                    })
+                }
+                AddonReorderButtons(canMoveUp = i > 0, canMoveDown = i < steps.lastIndex,
+                    onMoveUp = { onChange(steps.moved(i, -1)) }, onMoveDown = { onChange(steps.moved(i, 1)) })
+            }
+        }
+    }
 }
 
 /**

@@ -1,7 +1,7 @@
 <resources>
     <string name="usenet_ranking_title">Sorting profile</string>
-    <string name="usenet_ranking_original">Current sorting</string>
-    <string name="usenet_ranking_original_desc">Keep your existing sort order and search limits.</string>
+    <string name="usenet_ranking_original">Simple sort</string>
+    <string name="usenet_ranking_original_desc">Sort by resolution, source, size, indexer and date, in the order you choose on the TV.</string>
     <string name="usenet_ranking_balanced">Balanced</string>
     <string name="usenet_ranking_balanced_desc">Quality tiers and trusted release groups, with a preference for movies under 30 GB and episodes under 5 GB. Larger releases remain available.</string>
     <string name="usenet_ranking_best">Best Quality</string>
