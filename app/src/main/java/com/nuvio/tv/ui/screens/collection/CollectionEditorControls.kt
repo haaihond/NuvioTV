@@ -84,8 +84,6 @@ import com.nuvio.tv.domain.model.TraktCollectionSource
 import com.nuvio.tv.ui.components.LoadingIndicator
 import com.nuvio.tv.R
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.TextStyle
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -151,8 +149,7 @@ fun NuvioTextField(
                     }
                 ),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = NuvioTheme.colors.TextPrimary,
-                                            textDirection = TextDirection.Content
+                    color = NuvioTheme.colors.TextPrimary
                 ),
                 cursorBrush = SolidColor(if (isEditing) NuvioTheme.colors.Primary else Color.Transparent),
                 decorationBox = { innerTextField ->

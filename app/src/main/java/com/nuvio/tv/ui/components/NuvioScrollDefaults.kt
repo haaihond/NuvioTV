@@ -24,11 +24,7 @@ object NuvioScrollDefaults {
             if (containerSize <= 0f || size <= 0f) return 0f
             val itemCenter = offset + size / 2f
             val viewportTarget = containerSize * NuvioFocus.tokens.scrollViewportTarget
-            val distance = itemCenter - viewportTarget
-            if (offset >= 0f && offset + size <= containerSize && distance > 0f && distance < 12f) {
-                return 0f
-            }
-            return distance
+            return itemCenter - viewportTarget
         }
     }
 }

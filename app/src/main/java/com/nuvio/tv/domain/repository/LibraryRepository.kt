@@ -6,7 +6,7 @@ import com.nuvio.tv.domain.model.LibraryListTab
 import com.nuvio.tv.domain.model.LibrarySourceMode
 import com.nuvio.tv.domain.model.ListMembershipChanges
 import com.nuvio.tv.domain.model.ListMembershipSnapshot
-import com.nuvio.tv.domain.model.LibraryListPrivacy
+import com.nuvio.tv.domain.model.TraktListPrivacy
 import com.nuvio.tv.core.tracking.TrackingMembershipApplyResult
 import com.nuvio.tv.core.tracking.TrackingProviderId
 import kotlinx.coroutines.flow.Flow
@@ -35,19 +35,17 @@ interface LibraryRepository {
     suspend fun createPersonalList(
         name: String,
         description: String?,
-        privacy: LibraryListPrivacy,
-        source: LibrarySourceMode
+        privacy: TraktListPrivacy
     )
 
     suspend fun updatePersonalList(
         listId: String,
         name: String,
         description: String?,
-        privacy: LibraryListPrivacy,
-        source: LibrarySourceMode
+        privacy: TraktListPrivacy
     )
 
-    suspend fun deletePersonalList(listId: String, source: LibrarySourceMode)
-    suspend fun reorderPersonalLists(orderedListIds: List<String>, source: LibrarySourceMode)
+    suspend fun deletePersonalList(listId: String)
+    suspend fun reorderPersonalLists(orderedListIds: List<String>)
     suspend fun refreshNow()
 }

@@ -34,9 +34,7 @@ data class MetaPreview(
     val trailerYtIds: List<String> = emptyList(),
     val seasonCount: Int? = null,
     val voteCount: Int? = null,
-    val sourceAddonBaseUrl: String? = null,
-    val mdbListRatings: MDBListRatings? = null,
-    val mdbListRatingOrder: List<String> = MDBListSettings.DEFAULT_RATING_ORDER
+    val sourceAddonBaseUrl: String? = null
 ) {
     val apiType: String
         get() = type.toApiString(rawType)

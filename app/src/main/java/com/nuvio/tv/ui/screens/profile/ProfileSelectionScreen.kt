@@ -1,7 +1,5 @@
 package com.nuvio.tv.ui.screens.profile
 
-import androidx.tv.material3.MaterialTheme
-import com.nuvio.tv.ui.util.contentTextDirection
 import com.nuvio.tv.ui.theme.NuvioMotion
 
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -20,9 +18,6 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -53,7 +48,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -84,7 +78,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -93,9 +86,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.core.view.ViewCompat
@@ -1155,7 +1146,6 @@ private fun ProfileCard(
                 indication = null,
                 onClick = onClick
             )
-            .semantics { role = Role.Button }
             .padding(
                 horizontal = ProfileSelectionSpacing.CardPaddingHorizontal,
                 vertical = ProfileSelectionSpacing.CardPaddingVertical
@@ -1227,9 +1217,6 @@ private fun ProfileCard(
 
         Text(
             text = profile.name,
-            style = MaterialTheme.typography.labelLarge.copy(
-                textDirection = profile.name.contentTextDirection()
-            ),
             color = nameColor,
             fontSize = if (compact) 15.sp else 17.sp,
             fontWeight = nameWeight,
@@ -1319,7 +1306,6 @@ private fun AddProfileCard(
                 indication = null,
                 onClick = onClick
             )
-            .semantics { role = Role.Button }
             .padding(
                 horizontal = ProfileSelectionSpacing.CardPaddingHorizontal,
                 vertical = ProfileSelectionSpacing.CardPaddingVertical
@@ -1531,9 +1517,6 @@ private fun CreateProfileOverlay(
 
                     Text(
                         text = profileName.ifBlank { stringResource(R.string.profile_name_placeholder) },
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            textDirection = profileName.contentTextDirection()
-                        ),
                         color = if (profileName.isBlank()) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -1828,9 +1811,6 @@ private fun EditProfileOverlay(
                     )
                     Text(
                         text = profile.name,
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            textDirection = profile.name.contentTextDirection()
-                        ),
                         color = Color.White,
                         fontSize = 30.sp,
                         fontWeight = FontWeight.Black
@@ -1880,9 +1860,6 @@ private fun EditProfileOverlay(
 
                     Text(
                         text = profileName.ifBlank { stringResource(R.string.profile_name_placeholder) },
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            textDirection = profileName.contentTextDirection()
-                        ),
                         color = if (profileName.isBlank()) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -2403,7 +2380,6 @@ private fun ProfilePinBoxes(
         label = "pinDotSize"
     )
 
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(boxGap),
@@ -2478,7 +2454,6 @@ private fun ProfilePinBoxes(
             }
         }
     }
-    }
 }
 
 @Composable
@@ -2543,8 +2518,7 @@ private fun ProfileNameField(
                 .onFocusChanged { isFocused = it.isFocused },
             textStyle = TextStyle(
                 color = Color.White,
-                fontSize = 16.sp,
-                textDirection = TextDirection.Content
+                fontSize = 16.sp
             ),
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -2633,7 +2607,6 @@ private fun OverlayButton(
                 enabled = enabled,
                 onClick = onClick
             )
-            .semantics { role = Role.Button }
             .padding(horizontal = 28.dp, vertical = NuvioTheme.spacing.md),
         contentAlignment = Alignment.Center
     ) {

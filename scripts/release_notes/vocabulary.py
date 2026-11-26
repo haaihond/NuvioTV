@@ -46,9 +46,6 @@ ACTION_VERBS = {
     "introduce": "Added",
     "introduces": "Added",
     "introduced": "Added",
-    "limit": "Restricted",
-    "limits": "Restricted",
-    "limited": "Restricted",
     "lower": "Improved",
     "lowers": "Improved",
     "lowered": "Improved",
@@ -142,7 +139,6 @@ LOCALE_NAMES = {
     "ru": "Russian",
     "tr": "Turkish",
     "uk": "Ukrainian",
-    "vi": "Vietnamese",
     "zh-rCN": "Simplified Chinese",
     "zh-rTW": "Traditional Chinese",
 }

@@ -7,7 +7,6 @@
 package com.nuvio.tv.ui.components
 
 import com.nuvio.tv.ui.theme.NuvioTheme
-import com.nuvio.tv.ui.util.contentTextDirection
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -136,9 +135,7 @@ fun CollectionRowSection(
         ) {
             Text(
                 text = collection.title,
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    textDirection = collection.title.contentTextDirection()
-                ),
+                style = MaterialTheme.typography.headlineMedium,
                 color = NuvioTheme.colors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -365,9 +362,7 @@ private fun FolderCard(
                 ) {
                     Text(
                         text = folder.title,
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            textDirection = folder.title.contentTextDirection()
-                        ),
+                        style = MaterialTheme.typography.labelMedium,
                         color = Color.White,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

@@ -26,7 +26,6 @@ import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.domain.model.TmdbCollectionSource
 import com.nuvio.tv.domain.model.TraktCollectionSource
 import com.nuvio.tv.domain.model.enabledAddons
-import com.nuvio.tv.domain.model.findCollectionCatalog
 import com.nuvio.tv.domain.model.mergeCatalogPage
 import com.nuvio.tv.domain.model.nextCatalogSkip
 import com.nuvio.tv.domain.model.skipStep
@@ -42,12 +41,9 @@ import com.nuvio.tv.domain.model.PLACEHOLDER_IMAGE_URL
 import com.nuvio.tv.ui.screens.home.buildModernHomePresentation
 import com.nuvio.tv.ui.screens.home.homeItemStatusKey
 import com.nuvio.tv.domain.repository.CatalogRepository
-import com.nuvio.tv.core.poster.withCustomPosterUrls
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -166,13 +162,6 @@ class FolderDetailViewModel @Inject constructor(
     private val prefetchedTmdbIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val prefetchedExternalMetaIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    // MDBList batch prefetch for folder detail (follow-layout modern hero)
-    private val mdbBatchNegativeIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-    private var mdbBatchJob: Job? = null
-    @Volatile private var mdbBatchHasFired = false
-    @Volatile private var mdbLastFocusedRowKey: String? = null
-    @Volatile private var currentMdbListSettings: com.nuvio.tv.domain.model.MDBListSettings? = null
-
     private val _rowsFocusState = MutableStateFlow(com.nuvio.tv.ui.screens.home.HomeScreenFocusState())
     val rowsFocusState: StateFlow<com.nuvio.tv.ui.screens.home.HomeScreenFocusState> = _rowsFocusState.asStateFlow()
 
@@ -185,10 +174,8 @@ class FolderDetailViewModel @Inject constructor(
     init {
         posterOptions.bind(viewModelScope)
         loadFolder()
+        // Observe watched status immediately so badges are ready when catalogs load.
         observeWatchedStatusCombined()
-        viewModelScope.launch {
-            mdbListSettingsDataStore.settings.distinctUntilChanged().collect { currentMdbListSettings = it }
-        }
     }
 
     private fun observeWatchedStatusCombined() {
@@ -274,11 +261,11 @@ class FolderDetailViewModel @Inject constructor(
                 val (name, typeLabel, rawType) = when (source) {
                     is AddonCatalogCollectionSource -> {
                         val addon = addons.find { it.id == source.addonId }
-                        val catalog = addon?.catalogs?.findCollectionCatalog(source.type, source.catalogId)
-                            ?: addon?.catalogs?.findCollectionCatalog(source.type, source.catalogId.substringBefore(","))
-                            ?: addons.firstNotNullOfOrNull { a -> a.catalogs.findCollectionCatalog(source.type, source.catalogId) }
+                        val catalog = addon?.catalogs?.find { it.id == source.catalogId && it.apiType == source.type }
+                            ?: addon?.catalogs?.find { it.id == source.catalogId.substringBefore(",") && it.apiType == source.type }
+                            ?: addons.firstNotNullOfOrNull { a -> a.catalogs.find { it.id == source.catalogId && it.apiType == source.type } }
                         val labels = buildAddonTabLabels(source, catalog?.name)
-                        Triple(labels.first, labels.second, catalog?.apiType ?: source.type)
+                        Triple(labels.first, labels.second, source.type)
                     }
                     is TmdbCollectionSource -> Triple(source.title, buildTmdbTypeLabel(source), source.mediaType.value.toCollectionRawType())
                     is TraktCollectionSource -> Triple(source.title, buildTraktTypeLabel(source), source.mediaType.value.toCollectionRawType())
@@ -579,13 +566,10 @@ class FolderDetailViewModel @Inject constructor(
                         showFullReleaseDate = s.showFullReleaseDate,
                         movieWatchedStatus = s.movieWatchedStatus,
                         heroEnrichmentEnabled = computedHeroEnrichmentEnabled,
-                        classicFocusGradientEnabled = s.classicFocusGradientEnabled,
-                        mdbListShowOnHero = currentMdbListSettings?.showOnHero ?: false,
-                        mdbListRatingOrder = currentMdbListSettings?.enabledRatingOrder() ?: com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER
+                        classicFocusGradientEnabled = s.classicFocusGradientEnabled
                     )
                     s.copy(followLayoutHomeState = homeState.copy(modernHomePresentation = modernPresentation))
                 }
-                scheduleMdbBatchPrefetch()
             }
         } else {
             _uiState.update { s ->
@@ -615,107 +599,11 @@ class FolderDetailViewModel @Inject constructor(
                     showFullReleaseDate = s.showFullReleaseDate,
                     movieWatchedStatus = s.movieWatchedStatus,
                     heroEnrichmentEnabled = false,
-                    classicFocusGradientEnabled = s.classicFocusGradientEnabled,
-                    mdbListShowOnHero = currentMdbListSettings?.showOnHero ?: false,
-                    mdbListRatingOrder = currentMdbListSettings?.enabledRatingOrder() ?: com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER
+                    classicFocusGradientEnabled = s.classicFocusGradientEnabled
                 )
                 s.copy(followLayoutHomeState = homeState)
             }
-            scheduleMdbBatchPrefetch()
         }
-    }
-
-    fun onFocusedRowChanged(rowKey: String?) {
-        if (rowKey == null) return
-        mdbLastFocusedRowKey = rowKey
-        val state = _uiState.value
-        if (state.viewMode != FolderViewMode.FOLLOW_LAYOUT || state.homeLayout != HomeLayout.MODERN) return
-        val settings = currentMdbListSettings
-        if (settings == null || !mdbListRepository.isAvailable(settings) || !settings.showOnHero) return
-
-        val isFirst = !mdbBatchHasFired
-        mdbBatchJob?.cancel()
-        mdbBatchJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            if (!isFirst) kotlinx.coroutines.delay(250)
-            mdbBatchHasFired = true
-            val homeState = _uiState.value.followLayoutHomeState ?: return@launch
-            val allRows = homeState.modernHomePresentation.rows.list
-            val focusedIdx = allRows.indexOfFirst { it.key == rowKey }
-            if (focusedIdx < 0) return@launch
-
-            val targetRowKeys = mutableListOf(rowKey)
-            if (focusedIdx + 1 < allRows.size) {
-                targetRowKeys.add(allRows[focusedIdx + 1].key)
-            }
-
-            val itemsToFetch = mutableListOf<MetaPreview>()
-            for (rk in targetRowKeys) {
-                val carouselRow = allRows.firstOrNull { it.key == rk } ?: continue
-                for (carouselItem in carouselRow.items.list) {
-                    val meta = carouselItem.metaPreview ?: continue
-                    if (meta.mdbListRatings != null) continue
-                    if (meta.id in mdbBatchNegativeIds) continue
-                    if (meta.id.startsWith("__placeholder")) continue
-                    itemsToFetch.add(meta)
-                }
-            }
-
-            if (itemsToFetch.isEmpty()) return@launch
-            val ratingOrder = settings.enabledRatingOrder()
-            kotlinx.coroutines.coroutineScope {
-                itemsToFetch.map { item ->
-                    async(kotlinx.coroutines.Dispatchers.IO) {
-                        try {
-                            val meta = com.nuvio.tv.domain.model.Meta(
-                                id = item.id, type = item.type, name = item.name,
-                                poster = item.poster, posterShape = item.posterShape,
-                                background = item.background, logo = item.logo,
-                                description = item.description, releaseInfo = item.releaseInfo,
-                                imdbRating = item.imdbRating, genres = item.genres,
-                                runtime = item.runtime, director = item.director,
-                                cast = emptyList(), videos = emptyList(),
-                                country = item.country, awards = null,
-                                language = item.language, links = item.links
-                            )
-                            val result = mdbListRepository.getRatingsForMeta(
-                                meta = meta, fallbackItemId = item.id, fallbackItemType = item.apiType
-                            )
-                            if (result != null) {
-                                updateItemInTabs(item.id) { current ->
-                                    current.copy(
-                                        mdbListRatings = result.ratings,
-                                        mdbListRatingOrder = ratingOrder,
-                                        imdbRating = result.ratings.imdb?.toFloat() ?: current.imdbRating
-                                    )
-                                }
-                                val existing = _enrichedPreviews.value[item.id]
-                                if (existing != null) {
-                                    val enriched = _uiState.value.tabs
-                                        .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == item.id } }
-                                    if (enriched != null) {
-                                        publishEnrichedPreview(item.id, enriched)
-                                    }
-                                }
-                            } else {
-                                mdbBatchNegativeIds.add(item.id)
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-                        catch (_: Exception) { }
-                    }
-                }.awaitAll()
-            }
-            rebuildFollowLayoutState()
-        }
-    }
-
-    private fun scheduleMdbBatchPrefetch() {
-        val state = _uiState.value
-        if (state.viewMode != FolderViewMode.FOLLOW_LAYOUT || state.homeLayout != HomeLayout.MODERN) return
-        val homeState = state.followLayoutHomeState ?: return
-        val rowKey = mdbLastFocusedRowKey
-            ?: homeState.modernHomePresentation.rows.list.firstOrNull()?.key
-            ?: return
-        onFocusedRowChanged(rowKey)
     }
 
     private fun roundRobinMerge(lists: List<List<MetaPreview>>): List<MetaPreview> {
@@ -760,13 +648,13 @@ class FolderDetailViewModel @Inject constructor(
                 return@launch
             }
 
-            var catalog = addon.catalogs.findCollectionCatalog(source.type, source.catalogId)
-                ?: addon.catalogs.findCollectionCatalog(source.type, source.catalogId.substringBefore(","))
+            var catalog = addon.catalogs.find { it.id == source.catalogId && it.apiType == source.type }
+                ?: addon.catalogs.find { it.id == source.catalogId.substringBefore(",") && it.apiType == source.type }
             // If the catalog wasn't found in the declared addon, search all installed addons.
             var effectiveAddon: com.nuvio.tv.domain.model.Addon = addon
             if (catalog == null) {
                 for (a in addons) {
-                    val match = a.catalogs.findCollectionCatalog(source.type, source.catalogId)
+                    val match = a.catalogs.find { it.id == source.catalogId && it.apiType == source.type }
                     if (match != null) {
                         effectiveAddon = a
                         catalog = match
@@ -789,12 +677,11 @@ class FolderDetailViewModel @Inject constructor(
                 addonName = effectiveAddon.displayName,
                 catalogId = source.catalogId,
                 catalogName = catalogName,
-                type = catalog?.apiType ?: source.type,
+                type = source.type,
                 skip = 0,
                 skipStep = skipStep,
                 extraArgs = extraArgs,
-                supportsSkip = supportsSkip,
-                posterScreen = com.nuvio.tv.core.poster.CustomPosterScreen.COLLECTIONS
+                supportsSkip = supportsSkip
             ).collect { result ->
                 when (result) {
                     is NetworkResult.Success -> {
@@ -883,8 +770,7 @@ class FolderDetailViewModel @Inject constructor(
                 skip = nextSkip,
                 skipStep = row.skipStep,
                 extraArgs = row.extraArgs,
-                supportsSkip = row.supportsSkip,
-                posterScreen = com.nuvio.tv.core.poster.CustomPosterScreen.COLLECTIONS
+                supportsSkip = row.supportsSkip
             ).collect { result ->
                 when (result) {
                     is NetworkResult.Success -> {
@@ -960,7 +846,6 @@ class FolderDetailViewModel @Inject constructor(
         focusedRowKey: String?,
         focusedItemKeyByRow: Map<String, String>,
         catalogRowScrollStates: Map<String, Int>,
-        catalogRowScrollAnchors: Map<String, String>,
         focusedRowIndex: Int = 0,
         focusedItemIndex: Int = 0
     ) {
@@ -970,7 +855,6 @@ class FolderDetailViewModel @Inject constructor(
             focusedRowKey = focusedRowKey,
             focusedItemKeyByRow = focusedItemKeyByRow,
             catalogRowScrollStates = catalogRowScrollStates,
-            catalogRowScrollAnchors = catalogRowScrollAnchors,
             focusedRowIndex = focusedRowIndex,
             focusedItemIndex = focusedItemIndex,
             hasSavedFocus = true
@@ -986,7 +870,6 @@ class FolderDetailViewModel @Inject constructor(
         focusedRowKey: String?,
         focusedItemKeyByRow: Map<String, String>,
         catalogRowScrollStates: Map<String, Int>,
-        catalogRowScrollAnchors: Map<String, String>,
         focusedRowIndex: Int = 0,
         focusedItemIndex: Int = 0
     ) {
@@ -996,7 +879,6 @@ class FolderDetailViewModel @Inject constructor(
             focusedRowKey = focusedRowKey,
             focusedItemKeyByRow = focusedItemKeyByRow,
             catalogRowScrollStates = catalogRowScrollStates,
-            catalogRowScrollAnchors = catalogRowScrollAnchors,
             focusedRowIndex = focusedRowIndex,
             focusedItemIndex = focusedItemIndex,
             hasSavedFocus = true
@@ -1037,8 +919,6 @@ class FolderDetailViewModel @Inject constructor(
             tmdbCollectionSourceResolver.resolve(source, page).collect { result ->
                 when (result) {
                     is NetworkResult.Success -> {
-                        val posterPattern = layoutPreferenceDataStore.customPosterUrlPattern.first()
-                        val enabledScreens = layoutPreferenceDataStore.customPosterEnabledScreens.first()
                         _uiState.update { s ->
                             val tabs = s.tabs.toMutableList()
                             val currentRow = tabs.getOrNull(tabIndex)?.catalogRow
@@ -1057,7 +937,7 @@ class FolderDetailViewModel @Inject constructor(
                             } else {
                                 filteredData
                             }
-                            if (tabIndex < tabs.size) tabs[tabIndex] = tabs[tabIndex].copy(catalogRow = row.copy(items = row.items.withCustomPosterUrls(com.nuvio.tv.core.poster.patternForScreen(posterPattern, com.nuvio.tv.core.poster.CustomPosterScreen.COLLECTIONS, enabledScreens))), isLoading = false)
+                            if (tabIndex < tabs.size) tabs[tabIndex] = tabs[tabIndex].copy(catalogRow = row, isLoading = false)
                             s.copy(tabs = tabs)
                         }
                         rebuildAllTab()
@@ -1100,8 +980,6 @@ class FolderDetailViewModel @Inject constructor(
             traktPublicListSourceResolver.resolve(source, page).collect { result ->
                 when (result) {
                     is NetworkResult.Success -> {
-                        val posterPattern = layoutPreferenceDataStore.customPosterUrlPattern.first()
-                        val enabledScreens = layoutPreferenceDataStore.customPosterEnabledScreens.first()
                         _uiState.update { s ->
                             val tabs = s.tabs.toMutableList()
                             val currentRow = tabs.getOrNull(tabIndex)?.catalogRow
@@ -1120,7 +998,7 @@ class FolderDetailViewModel @Inject constructor(
                             } else {
                                 filteredData
                             }
-                            if (tabIndex < tabs.size) tabs[tabIndex] = tabs[tabIndex].copy(catalogRow = row.copy(items = row.items.withCustomPosterUrls(com.nuvio.tv.core.poster.patternForScreen(posterPattern, com.nuvio.tv.core.poster.CustomPosterScreen.COLLECTIONS, enabledScreens))), isLoading = false)
+                            if (tabIndex < tabs.size) tabs[tabIndex] = tabs[tabIndex].copy(catalogRow = row, isLoading = false)
                             s.copy(tabs = tabs)
                         }
                         rebuildAllTab()
@@ -1233,7 +1111,7 @@ class FolderDetailViewModel @Inject constructor(
                 val enrichedItem = _uiState.value.tabs
                     .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == item.id } }
                 if (enrichedItem != null) {
-                    publishEnrichedPreview(item.id, enrichedItem)
+                    _enrichedPreviews.update { it + (item.id to enrichedItem) }
                 }
             }
             return
@@ -1320,6 +1198,11 @@ class FolderDetailViewModel @Inject constructor(
                         result = result.copy(
                             background = finalEnrichment.backdrop ?: result.background,
                             logo = finalEnrichment.logo ?: result.logo
+                        )
+                    }
+                    if (tmdbSettings.useReleaseDates) {
+                        result = result.copy(
+                            releaseInfo = finalEnrichment.releaseInfo ?: result.releaseInfo
                         )
                     }
                     if (tmdbSettings.useDetails) {
@@ -1421,7 +1304,7 @@ class FolderDetailViewModel @Inject constructor(
                     tab.catalogRow?.items?.firstOrNull { it.id == item.id }
                 }
             if (enrichedItem != null) {
-                publishEnrichedPreview(item.id, enrichedItem)
+                _enrichedPreviews.update { it + (item.id to enrichedItem) }
             }
             enrichedItemIds.add(item.id)
             rebuildFollowLayoutState()
@@ -1496,32 +1379,6 @@ class FolderDetailViewModel @Inject constructor(
     private fun extractYear(releaseInfo: String?): String? {
         if (releaseInfo.isNullOrBlank()) return null
         return Regex("\\b(19|20)\\d{2}\\b").find(releaseInfo)?.value
-    }
-
-    private fun publishEnrichedPreview(itemId: String, item: MetaPreview) {
-        val withRatings = if (item.mdbListRatings == null) {
-            val existingRatings = _enrichedPreviews.value[itemId]?.mdbListRatings
-            val tabsRatings = if (existingRatings == null) {
-                _uiState.value.tabs
-                    .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == itemId } }
-                    ?.mdbListRatings
-            } else null
-            val ratings = existingRatings ?: tabsRatings
-            if (ratings != null) {
-                val order = _enrichedPreviews.value[itemId]?.mdbListRatingOrder
-                    ?: _uiState.value.tabs
-                        .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == itemId } }
-                        ?.mdbListRatingOrder
-                    ?: currentMdbListSettings?.enabledRatingOrder()
-                    ?: com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER
-                item.copy(
-                    mdbListRatings = ratings,
-                    mdbListRatingOrder = order,
-                    imdbRating = ratings.imdb?.toFloat() ?: item.imdbRating
-                )
-            } else item
-        } else item
-        _enrichedPreviews.update { it + (itemId to withRatings) }
     }
 
     private fun updateItemInTabs(itemId: String, transform: (MetaPreview) -> MetaPreview) {
@@ -1606,6 +1463,11 @@ class FolderDetailViewModel @Inject constructor(
                                         logo = enrichment.logo ?: result.logo
                                     )
                                 }
+                                if (tmdbSettings.useReleaseDates) {
+                                    result = result.copy(
+                                        releaseInfo = enrichment.releaseInfo ?: result.releaseInfo
+                                    )
+                                }
                                 if (tmdbSettings.useDetails) {
                                     result = result.copy(
                                         runtime = enrichment.runtimeMinutes?.toString() ?: result.runtime,
@@ -1624,7 +1486,7 @@ class FolderDetailViewModel @Inject constructor(
                                         tab.catalogRow?.items?.firstOrNull { it.id == item.id }
                                     }
                                 if (enrichedItem != null) {
-                                    publishEnrichedPreview(item.id, enrichedItem)
+                                    _enrichedPreviews.update { it + (item.id to enrichedItem) }
                                 }
                                 rebuildFollowLayoutState()
                             }
@@ -1653,14 +1515,14 @@ class FolderDetailViewModel @Inject constructor(
                         val enrichedItem = _uiState.value.tabs
                             .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == item.id } }
                         if (enrichedItem != null) {
-                            publishEnrichedPreview(item.id, enrichedItem)
+                            _enrichedPreviews.update { it + (item.id to enrichedItem) }
                         }
                     } else if (result is com.nuvio.tv.core.network.NetworkResult.Error && result.code == com.nuvio.tv.core.network.NetworkResult.SOURCE_SUFFICIENT_CODE) {
                         enrichedItemIds.add(item.id)
                         val enrichedItem = _uiState.value.tabs
                             .firstNotNullOfOrNull { tab -> tab.catalogRow?.items?.firstOrNull { it.id == item.id } }
                         if (enrichedItem != null) {
-                            publishEnrichedPreview(item.id, enrichedItem)
+                            _enrichedPreviews.update { it + (item.id to enrichedItem) }
                         }
                     }
                 }
@@ -1684,7 +1546,7 @@ class FolderDetailViewModel @Inject constructor(
                                 tab.catalogRow?.items?.firstOrNull { it.id == item.id }
                             }
                         if (enrichedItem != null) {
-                            publishEnrichedPreview(item.id, enrichedItem)
+                            _enrichedPreviews.update { it + (item.id to enrichedItem) }
                         }
                         enrichedItemIds.add(item.id)
                         rebuildFollowLayoutState()

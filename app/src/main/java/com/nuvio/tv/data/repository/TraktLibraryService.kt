@@ -21,7 +21,7 @@ import com.nuvio.tv.domain.model.LibraryEntryInput
 import com.nuvio.tv.domain.model.LibraryListTab
 import com.nuvio.tv.domain.model.ListMembershipChanges
 import com.nuvio.tv.domain.model.ListMembershipSnapshot
-import com.nuvio.tv.domain.model.LibraryListPrivacy
+import com.nuvio.tv.domain.model.TraktListPrivacy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -164,7 +164,7 @@ class TraktLibraryService @Inject constructor(
     suspend fun createPersonalList(
         name: String,
         description: String?,
-        privacy: LibraryListPrivacy
+        privacy: TraktListPrivacy
     ) {
         val response = traktAuthService.executeAuthorizedRequest { authHeader ->
             traktApi.createUserList(
@@ -203,7 +203,7 @@ class TraktLibraryService @Inject constructor(
         listId: String,
         name: String,
         description: String?,
-        privacy: LibraryListPrivacy
+        privacy: TraktListPrivacy
     ) {
         performOptimisticMutation(
             optimistic = { snapshot ->
@@ -370,8 +370,7 @@ class TraktLibraryService @Inject constructor(
             addonBaseUrl = item.addonBaseUrl,
             imdbId = item.imdbId,
             tmdbId = item.tmdbId,
-            traktId = item.traktId,
-            rawPosterUrl = item.poster
+            traktId = item.traktId
         )).copy(
             listedAt = System.currentTimeMillis(),
             listKeys = existing?.listKeys.orEmpty() + listKey
@@ -624,7 +623,7 @@ class TraktLibraryService @Inject constructor(
             traktListId = traktId,
             slug = slug,
             description = dto.description,
-            privacy = LibraryListPrivacy.fromApi(dto.privacy),
+            privacy = TraktListPrivacy.fromApi(dto.privacy),
             sortBy = dto.sortBy,
             sortHow = dto.sortHow
         )
@@ -706,8 +705,7 @@ class TraktLibraryService @Inject constructor(
             traktRank = item.rank,
             imdbId = ids?.imdb?.takeIf { it.isNotBlank() },
             tmdbId = ids?.tmdb,
-            traktId = ids?.trakt,
-            rawPosterUrl = images.traktBestPosterUrl()
+            traktId = ids?.trakt
         )
     }
 

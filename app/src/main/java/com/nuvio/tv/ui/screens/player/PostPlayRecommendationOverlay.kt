@@ -116,7 +116,6 @@ fun PostPlayRecommendationOverlay(
     onTrailerEnded: () -> Unit,
     onPreviousRecommendation: () -> Unit,
     onNextRecommendation: () -> Unit,
-    mdbListRatingOrder: List<String> = com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER,
     modifier: Modifier = Modifier
 ) {
     val recommendation = state.recommendation ?: return
@@ -297,8 +296,7 @@ fun PostPlayRecommendationOverlay(
                     playerWindowFocusRequester = playerWindowFocusRequester,
                     playFocusRequester = playFocusRequester,
                     onShowSynopsis = { showSynopsisOverlay = true },
-                    onDescriptionTruncationChanged = { descriptionTruncated = it },
-                    mdbListRatingOrder = mdbListRatingOrder
+                    onDescriptionTruncationChanged = { descriptionTruncated = it }
                 )
 
                 Spacer(modifier = Modifier.height(actionTopSpacing))
@@ -470,8 +468,7 @@ private fun PostPlayRecommendationSummary(
     playerWindowFocusRequester: FocusRequester,
     playFocusRequester: FocusRequester,
     onShowSynopsis: () -> Unit,
-    onDescriptionTruncationChanged: (Boolean) -> Unit,
-    mdbListRatingOrder: List<String> = com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER
+    onDescriptionTruncationChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val headerVisibility = remember {
@@ -613,7 +610,7 @@ private fun PostPlayRecommendationSummary(
                         ?.takeUnless { it.isEmpty() }
                         ?.let { ratings ->
                             Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
-                            MDBListRatingsRow(ratings = ratings, order = mdbListRatingOrder)
+                            MDBListRatingsRow(ratings = ratings)
                         }
 
                     if (!displayedRecommendation.description.isNullOrBlank()) {

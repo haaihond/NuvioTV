@@ -71,7 +71,6 @@ import com.nuvio.tv.data.local.SubtitleStyleSettings
 import com.nuvio.tv.domain.model.Subtitle
 import com.nuvio.tv.ui.components.LoadingIndicator
 import com.nuvio.tv.ui.screens.detail.requestFocusAfterFrames
-import com.nuvio.tv.ui.screens.player.autosync.AutoSyncedChip
 
 private const val SubtitleOffLanguageKey = "__off__"
 private const val SubtitleUnknownLanguageKey = "__unknown__"
@@ -578,15 +577,6 @@ internal fun SubtitleSelectionOverlay(
                             activeRail = OverlayFocusRail.OPTION
                             onAddonSubtitleSelected(subtitle)
                             revealStyleRail = true
-                        },
-                        onOptionLongPressed = { optionId ->
-                            activeOptionFocusId = optionId
-                            activeRail = OverlayFocusRail.OPTION
-                            if (optionId == selectedOptionId) {
-                                selectedOptionId = null
-                                revealStyleRail = false
-                                onDisableSubtitles()
-                            }
                         }
                     )
                 }
@@ -711,8 +701,7 @@ private fun SubtitleOptionsRail(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
     onInternalTrackSelected: (String, Int) -> Unit,
-    onAddonSubtitleSelected: (String, Subtitle) -> Unit,
-    onOptionLongPressed: (String) -> Unit
+    onAddonSubtitleSelected: (String, Subtitle) -> Unit
 ) {
     LaunchedEffect(focusToken) {
         if (focusToken <= 0) return@LaunchedEffect
@@ -797,8 +786,7 @@ private fun SubtitleOptionsRail(
                                         }
                                     }
                                 }
-                            },
-                            onLongClick = { onOptionLongPressed(option.id) }
+                            }
                         )
                     }
                 }
@@ -1157,8 +1145,7 @@ private fun SubtitleOptionCard(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
     onFocused: () -> Unit,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onClick: () -> Unit
 ) {
     val titleColor = if (item.isSelected) NuvioTheme.colors.OnSecondary else Color.White
     val metaColor = if (item.isSelected) {
@@ -1172,7 +1159,6 @@ private fun SubtitleOptionCard(
 
     Card(
         onClick = onClick,
-        onLongClick = onLongClick,
         modifier = Modifier
             .fillMaxWidth()
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
@@ -1230,13 +1216,7 @@ private fun SubtitleOptionCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row( // AutoSync hook: room for the "Auto synced" chip beside the source
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SourceChip(label = item.sourceLabel, selected = item.isSelected)
-                    item.addonSubtitle?.let { AutoSyncedChip(it.url, item.isSelected) } // AutoSync hook
-                }
+                SourceChip(label = item.sourceLabel, selected = item.isSelected)
                 Text(
                     text = item.title,
                     style = MaterialTheme.typography.bodyLarge,

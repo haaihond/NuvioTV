@@ -22,17 +22,14 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.FocusRequester.Companion.Cancel
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.MaterialTheme
@@ -110,29 +107,22 @@ fun NextEpisodeEndPromptOverlay(
                 horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-                PlayerOverlayButton(
+                DialogButton(
                     text = stringResource(R.string.player_next_episode_prompt_yes),
                     onClick = onContinue,
-                    primary = true,
+                    isPrimary = true,
                     modifier = Modifier
                         .focusRequester(continueFocusRequester)
-                        .focusProperties {
-                            if (isRtl) left = returnFocusRequester else right = returnFocusRequester
-                            if (isRtl) right = Cancel else left = Cancel
-                        }
+                        .focusProperties { right = returnFocusRequester }
                 )
 
-                PlayerOverlayButton(
+                DialogButton(
                     text = stringResource(R.string.player_next_episode_prompt_no),
                     onClick = onReturnToDetails,
-                    primary = false,
+                    isPrimary = false,
                     modifier = Modifier
                         .focusRequester(returnFocusRequester)
-                        .focusProperties {
-                            if (isRtl) right = continueFocusRequester else left = continueFocusRequester
-                            if (isRtl) left = Cancel else right = Cancel
-                        }
+                        .focusProperties { left = continueFocusRequester }
                 )
             }
         }

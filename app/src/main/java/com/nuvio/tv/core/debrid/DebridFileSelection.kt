@@ -2,76 +2,55 @@ package com.nuvio.tv.core.debrid
 
 import com.nuvio.tv.domain.model.StreamClientResolve
 
-internal fun <T> selectDebridFile(
-    files: List<T>,
-    resolve: StreamClientResolve,
-    season: Int?,
-    episode: Int?,
-    path: (T) -> String,
-    isPlayable: (T) -> Boolean,
-    size: (T) -> Long,
-): T? {
-    val playable = files.filter(isPlayable)
-    if (playable.isEmpty()) return null
+internal fun String.normalizedDebridFileName(): String =
+    substringAfterLast('/')
+        .substringBeforeLast('.')
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
 
-    val names = listOfNotNull(resolve.filename, resolve.stream?.raw?.filename)
-        .map { it.normalizedPath() }
+internal fun StreamClientResolve.specificDebridFileNames(episodePatterns: List<String>): List<String> {
+    val raw = stream?.raw
+    return listOfNotNull(
+        filename,
+        raw?.filename,
+        raw?.parsed?.rawTitle?.takeIf { it.looksSpecificForDebridSelection(episodePatterns) },
+        torrentName?.takeIf { it.looksSpecificForDebridSelection(episodePatterns) }
+    )
+        .map { it.normalizedDebridFileName() }
         .filter { it.isNotBlank() }
         .distinct()
-    for (name in names) {
-        val matches = playable.matchingFiles(name, path)
-        if (matches.isNotEmpty()) return matches.singleOrNull()
-    }
-
-    val episodePattern = buildEpisodePattern(season ?: resolve.season, episode ?: resolve.episode)
-    if (episodePattern != null) {
-        val matches = playable.filter {
-            episodePattern.containsMatchIn(path(it).normalizedPath().substringAfterLast('/'))
-        }
-        if (matches.isNotEmpty()) return matches.singleOrNull()
-    }
-
-    if (names.isNotEmpty() || episodePattern != null) return null
-
-    resolve.fileIdx?.let { index ->
-        return files.getOrNull(index)?.takeIf(isPlayable)
-    }
-
-    return playable.maxByOrNull(size)
 }
 
-private fun String.normalizedPath(): String = trim().replace('\\', '/').removePrefix("/")
-
-private fun <T> List<T>.matchingFiles(name: String, path: (T) -> String): List<T> {
-    for (ignoreCase in listOf(false, true)) {
-        val matches = filter {
-            val filePath = path(it).normalizedPath()
-            filePath.equals(name, ignoreCase = ignoreCase) ||
-                (name.contains('/') && filePath.endsWith("/$name", ignoreCase = ignoreCase))
-        }
-        if (matches.isNotEmpty()) return matches
-    }
-    val basename = name.substringAfterLast('/')
-    for (ignoreCase in listOf(false, true)) {
-        val matches = filter {
-            path(it).normalizedPath().substringAfterLast('/').equals(basename, ignoreCase = ignoreCase)
-        }
-        if (matches.isNotEmpty()) return matches
-    }
-    return emptyList()
+internal fun String.looksSpecificForDebridSelection(episodePatterns: List<String>): Boolean {
+    val lower = lowercase()
+    return lower.hasDebridVideoExtension() || episodePatterns.any { pattern -> lower.contains(pattern) }
 }
 
-private fun buildEpisodePattern(season: Int?, episode: Int?): Regex? {
-    if (season == null || episode == null) return null
-    return Regex(
-        "(?<![a-z0-9])(?:s0*${season}e0*${episode}|0*${season}x0*${episode})(?![0-9])",
-        RegexOption.IGNORE_CASE,
+internal fun <T> List<T>.firstDebridNameMatch(
+    names: List<String>,
+    displayName: (T) -> String
+): T? =
+    firstOrNull { item ->
+        val fileName = displayName(item).normalizedDebridFileName()
+        names.any { name -> fileName.contains(name) || name.contains(fileName) }
+    }
+
+internal fun buildDebridEpisodePatterns(season: Int?, episode: Int?): List<String> {
+    if (season == null || episode == null) return emptyList()
+    val seasonTwo = season.toString().padStart(2, '0')
+    val episodeTwo = episode.toString().padStart(2, '0')
+    return listOf(
+        "s${seasonTwo}e$episodeTwo",
+        "${season}x$episodeTwo",
+        "${season}x$episode"
     )
 }
 
-internal fun String.hasDebridVideoExtension(): Boolean = videoExtensions.any { endsWith(it, ignoreCase = true) }
+internal fun String.hasDebridVideoExtension(): Boolean =
+    debridVideoExtensions.any { endsWith(it) }
 
-private val videoExtensions = setOf(
+private val debridVideoExtensions = setOf(
     ".mp4",
     ".mkv",
     ".webm",
@@ -81,5 +60,5 @@ private val videoExtensions = setOf(
     ".ts",
     ".m2ts",
     ".wmv",
-    ".flv",
+    ".flv"
 )

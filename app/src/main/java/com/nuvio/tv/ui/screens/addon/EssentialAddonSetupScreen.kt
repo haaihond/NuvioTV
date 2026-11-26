@@ -45,8 +45,6 @@ import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.server.AddonWebConfigMode
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.TextStyle
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -73,8 +71,8 @@ fun EssentialAddonSetupScreen(
         ) {
             Text(
                 text = stringResource(R.string.essential_addon_setup_title),
-                style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                color = NuvioTheme.colors.TextPrimary,
+                style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
+                color = NuvioTheme.colors.TextPrimary
             )
             Spacer(modifier = Modifier.height(10.dp))
             Text(
@@ -101,8 +99,8 @@ fun EssentialAddonSetupScreen(
                     ) {
                         Text(
                             text = stringResource(R.string.addon_install_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                            color = NuvioTheme.colors.TextPrimary,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = NuvioTheme.colors.TextPrimary
                         )
                         BasicTextField(
                             value = uiState.installUrl,
@@ -121,8 +119,7 @@ fun EssentialAddonSetupScreen(
                                     keyboardController?.hide()
                                 }
                             ),
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = NuvioTheme.colors.TextPrimary,
-                                            textDirection = TextDirection.Content),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = NuvioTheme.colors.TextPrimary),
                             cursorBrush = SolidColor(NuvioTheme.colors.Primary),
                             decorationBox = { innerTextField ->
                                 Box(
@@ -189,8 +186,8 @@ fun EssentialAddonSetupScreen(
                         )
                         Text(
                             text = stringResource(R.string.addon_manage_from_phone_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                            color = NuvioTheme.colors.TextPrimary,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = NuvioTheme.colors.TextPrimary
                         )
                         Text(
                             text = stringResource(R.string.addon_manage_addons_only_from_phone_subtitle),

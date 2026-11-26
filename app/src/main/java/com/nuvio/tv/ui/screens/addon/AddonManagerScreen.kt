@@ -72,11 +72,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -90,14 +85,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.tv.material3.Border
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
-import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Switch
@@ -114,8 +108,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.TextStyle
 import com.nuvio.tv.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
@@ -300,8 +292,8 @@ fun AddonManagerScreen(
                         Column(modifier = Modifier.padding(20.dp)) {
                             Text(
                                 text = stringResource(R.string.addon_install_title),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                                color = NuvioTheme.colors.TextPrimary,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = NuvioTheme.colors.TextPrimary
                             )
                             Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
                             Row(
@@ -360,8 +352,7 @@ fun AddonManagerScreen(
                                                 }
                                             ),
                                             textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                                color = NuvioTheme.colors.TextPrimary,
-                                            textDirection = TextDirection.Content
+                                                color = NuvioTheme.colors.TextPrimary
                                             ),
                                             cursorBrush = SolidColor(if (isEditing) NuvioTheme.colors.Primary else Color.Transparent),
                                             decorationBox = { innerTextField ->
@@ -387,9 +378,7 @@ fun AddonManagerScreen(
                                         installButtonFocusRequester.requestFocus()
                                     },
                                     enabled = !uiState.isInstalling,
-                                    modifier = Modifier
-                                        .focusRequester(installButtonFocusRequester)
-                                        .semantics { role = Role.Button },
+                                    modifier = Modifier.focusRequester(installButtonFocusRequester),
                                     colors = ButtonDefaults.colors(
                                         containerColor = NuvioTheme.colors.BackgroundCard,
                                         contentColor = NuvioTheme.colors.TextPrimary,
@@ -455,8 +444,8 @@ fun AddonManagerScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.addon_installed_section),
-                        style = MaterialTheme.typography.titleLarge.copy(textDirection = TextDirection.Content),
-                        color = NuvioTheme.colors.TextPrimary,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = NuvioTheme.colors.TextPrimary
                     )
                     Spacer(modifier = Modifier.width(NuvioTheme.spacing.md))
                     if (uiState.isLoading && uiState.installedAddons.isEmpty()) {
@@ -547,9 +536,7 @@ fun AddonManagerScreen(
                 ) {
                     Button(
                         onClick = { addonUrlPendingDeletion = null },
-                        modifier = Modifier
-                            .focusRequester(deleteDialogFocusRequester)
-                            .semantics { role = Role.Button }
+                        modifier = Modifier.focusRequester(deleteDialogFocusRequester)
                     ) {
                         Text(stringResource(R.string.addon_delete_no))
                     }
@@ -557,8 +544,7 @@ fun AddonManagerScreen(
                         onClick = {
                             viewModel.removeAddon(addonUrl)
                             addonUrlPendingDeletion = null
-                        },
-                        modifier = Modifier.semantics { role = Role.Button }
+                        }
                     ) {
                         Text(stringResource(R.string.addon_delete_yes))
                     }
@@ -635,8 +621,7 @@ private fun ManageFromPhoneCard(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused }
-            .semantics { role = Role.Button },
+            .onFocusChanged { isFocused = it.isFocused },
         colors = ClickableSurfaceDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundCard,
             focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -668,8 +653,8 @@ private fun ManageFromPhoneCard(
                 Column {
                     Text(
                         text = stringResource(R.string.addon_manage_from_phone_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                        color = NuvioTheme.colors.TextPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = NuvioTheme.colors.TextPrimary
                     )
                     Text(
                         text = subtitle,
@@ -697,8 +682,7 @@ private fun CatalogOrderEntryCard(onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused }
-            .semantics { role = Role.Button },
+            .onFocusChanged { isFocused = it.isFocused },
         colors = ClickableSurfaceDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundCard,
             focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -730,8 +714,8 @@ private fun CatalogOrderEntryCard(onClick: () -> Unit) {
                 Column {
                     Text(
                         text = stringResource(R.string.addon_reorder_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                        color = NuvioTheme.colors.TextPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = NuvioTheme.colors.TextPrimary
                     )
                     Text(
                         text = stringResource(R.string.addon_reorder_subtitle),
@@ -741,7 +725,7 @@ private fun CatalogOrderEntryCard(onClick: () -> Unit) {
                 }
             }
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
                 tint = NuvioTheme.colors.TextSecondary
@@ -759,8 +743,7 @@ private fun CollectionsEntryCard(onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused }
-            .semantics { role = Role.Button },
+            .onFocusChanged { isFocused = it.isFocused },
         colors = ClickableSurfaceDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundCard,
             focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -792,8 +775,8 @@ private fun CollectionsEntryCard(onClick: () -> Unit) {
                 Column {
                     Text(
                         text = stringResource(R.string.collections_card_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                        color = NuvioTheme.colors.TextPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = NuvioTheme.colors.TextPrimary
                     )
                     Text(
                         text = stringResource(R.string.collections_card_subtitle),
@@ -803,7 +786,7 @@ private fun CollectionsEntryCard(onClick: () -> Unit) {
                 }
             }
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
                 tint = NuvioTheme.colors.TextSecondary
@@ -825,8 +808,7 @@ private fun RefreshAddonsEntryCard(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused }
-            .semantics { role = Role.Button },
+            .onFocusChanged { isFocused = it.isFocused },
         colors = ClickableSurfaceDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundCard,
             focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -858,8 +840,8 @@ private fun RefreshAddonsEntryCard(
                 Column {
                     Text(
                         text = stringResource(R.string.addon_refresh_action),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                        color = NuvioTheme.colors.TextPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = NuvioTheme.colors.TextPrimary
                     )
                     Text(
                         text = subtitle,
@@ -886,8 +868,7 @@ internal fun QrCodeOverlay(
     instruction: String,
     onClose: () -> Unit,
     hasPendingChange: Boolean = false,
-    qrSize: Dp = 220.dp,
-    status: String? = null
+    qrSize: Dp = 220.dp
 ) {
     val focusRequester = remember { FocusRequester() }
 
@@ -937,23 +918,11 @@ internal fun QrCodeOverlay(
                 )
             }
 
-            if (status != null) {
-                Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = NuvioTheme.colors.TextPrimary,
-                    textAlign = TextAlign.Center
-                )
-            }
-
             Spacer(modifier = Modifier.height(NuvioTheme.spacing.xl))
 
             Surface(
                 onClick = onClose,
-                modifier = Modifier
-                    .focusRequester(focusRequester)
-                    .semantics { role = Role.Button },
+                modifier = Modifier.focusRequester(focusRequester),
                 colors = ClickableSurfaceDefaults.colors(
                     containerColor = NuvioTheme.colors.Surface,
                     focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -980,8 +949,7 @@ internal fun QrCodeOverlay(
                     Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
                     Text(
                         text = stringResource(R.string.addon_qr_close),
-                        color = NuvioTheme.colors.TextPrimary,
-                        style = LocalTextStyle.current.copy(textDirection = TextDirection.Content),
+                        color = NuvioTheme.colors.TextPrimary
                     )
                 }
             }
@@ -1027,8 +995,8 @@ internal fun ConfirmAddonChangesDialog(
             ) {
                 Text(
                     text = stringResource(R.string.addon_confirm_title),
-                    style = MaterialTheme.typography.headlineSmall.copy(textDirection = TextDirection.Content),
-                    color = NuvioTheme.colors.TextPrimary,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = NuvioTheme.colors.TextPrimary
                 )
 
                 Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
@@ -1217,7 +1185,6 @@ internal fun ConfirmAddonChangesDialog(
                     ) {
                         Surface(
                             onClick = onReject,
-                            modifier = Modifier.semantics { role = Role.Button },
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = NuvioTheme.colors.Surface,
                                 focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -1243,17 +1210,14 @@ internal fun ConfirmAddonChangesDialog(
                                 Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
                                 Text(
                                     text = stringResource(R.string.addon_confirm_reject),
-                                    color = NuvioTheme.colors.TextPrimary,
-                                    style = LocalTextStyle.current.copy(textDirection = TextDirection.Content),
+                                    color = NuvioTheme.colors.TextPrimary
                                 )
                             }
                         }
 
                         Surface(
                             onClick = onConfirm,
-                            modifier = Modifier
-                                .focusRequester(focusRequester)
-                                .semantics { role = Role.Button },
+                            modifier = Modifier.focusRequester(focusRequester),
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = NuvioTheme.colors.Secondary,
                                 focusedContainerColor = NuvioTheme.colors.SecondaryVariant
@@ -1368,8 +1332,8 @@ private fun AddonCardContent(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = addon.displayName,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, textDirection = TextDirection.Content),
-                    color = NuvioTheme.colors.TextPrimary,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = NuvioTheme.colors.TextPrimary
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1399,11 +1363,7 @@ private fun AddonCardContent(
                     Surface(
                         onClick = { onEnabledChange(!addon.enabled) },
                         modifier = Modifier
-                            .focusRequester(toggleFocusRequester ?: remember { FocusRequester() })
-                            .semantics {
-                                role = Role.Switch
-                                toggleableState = if (addon.enabled) ToggleableState.On else ToggleableState.Off
-                            },
+                            .focusRequester(toggleFocusRequester ?: remember { FocusRequester() }),
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = Color.Transparent,
                             focusedContainerColor = NuvioTheme.colors.FocusBackground
@@ -1435,7 +1395,6 @@ private fun AddonCardContent(
                         Button(
                             onClick = onMoveUp,
                             enabled = canMoveUp,
-                            modifier = Modifier.semantics { role = Role.Button },
                             colors = ButtonDefaults.colors(
                                 containerColor = NuvioTheme.colors.BackgroundCard,
                                 contentColor = NuvioTheme.colors.TextSecondary,
@@ -1449,7 +1408,6 @@ private fun AddonCardContent(
                         Button(
                             onClick = onMoveDown,
                             enabled = canMoveDown,
-                            modifier = Modifier.semantics { role = Role.Button },
                             colors = ButtonDefaults.colors(
                                 containerColor = NuvioTheme.colors.BackgroundCard,
                                 contentColor = NuvioTheme.colors.TextSecondary,
@@ -1463,7 +1421,6 @@ private fun AddonCardContent(
                     }
                     Button(
                         onClick = onRemove,
-                        modifier = Modifier.semantics { role = Role.Button },
                         colors = ButtonDefaults.colors(
                             containerColor = NuvioTheme.colors.BackgroundCard,
                             contentColor = NuvioTheme.colors.TextSecondary,

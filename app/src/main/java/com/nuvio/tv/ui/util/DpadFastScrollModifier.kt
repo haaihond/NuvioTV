@@ -88,8 +88,6 @@ private enum class FastScrollMode { None, Vertical }
  * @param verticalVelocityDpPerSec  drag speed in dp per second
  * @param endTimeoutMs              idle gap before the drag self-terminates
  * @param maxFrameDtSec             per-frame delta clamp (jitter guard)
- * @param throttleHorizontalRepeats when false, left/right repeats are left to
- *                                  the focused row. Home keeps the default gate.
  */
 fun Modifier.dpadVerticalFastScroll(
     scrollableState: ScrollableState,
@@ -100,7 +98,6 @@ fun Modifier.dpadVerticalFastScroll(
     verticalVelocityDpPerSec: Float = DEFAULT_VERTICAL_VELOCITY_DP_PER_SEC,
     endTimeoutMs: Long = DEFAULT_END_TIMEOUT_MS,
     maxFrameDtSec: Float = DEFAULT_MAX_FRAME_DT_SEC,
-    throttleHorizontalRepeats: Boolean = true,
 ): Modifier = composed {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
@@ -246,18 +243,12 @@ fun Modifier.dpadVerticalFastScroll(
         )
 
         true
-    }.let { verticalKeys ->
-        if (throttleHorizontalRepeats) {
-            verticalKeys.dpadRepeatThrottle(
-                horizontalGateMs = horizontalGateMs,
-                // Vertical repeats are fully consumed by the preview handler above,
-                // so they never reach the throttle. `Long.MAX_VALUE` keeps the
-                // throttle as a pure horizontal gate without any accidental
-                // vertical side effects if a key somehow slips past.
-                verticalGateMs = Long.MAX_VALUE,
-            )
-        } else {
-            verticalKeys
-        }
-    }
+    }.dpadRepeatThrottle(
+        horizontalGateMs = horizontalGateMs,
+        // Vertical repeats are fully consumed by the preview handler above,
+        // so they never reach the throttle. `Long.MAX_VALUE` keeps the
+        // throttle as a pure horizontal gate without any accidental
+        // vertical side effects if a key somehow slips past.
+        verticalGateMs = Long.MAX_VALUE,
+    )
 }

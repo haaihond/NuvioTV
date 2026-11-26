@@ -12,6 +12,8 @@ data class TmdbSettings(
     val useBasicInfo: Boolean = true,
     // Group: Details (runtime, status, country, language)
     val useDetails: Boolean = true,
+    // Group: Release Dates (release date / air date)
+    val useReleaseDates: Boolean = false,
     // Group: Credits (cast with photos, director, writer)
     val useCredits: Boolean = true,
     // Group: Production companies

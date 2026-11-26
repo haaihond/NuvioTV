@@ -5,7 +5,6 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.R
-import com.nuvio.tv.core.poster.withCustomPosterUrls
 import com.nuvio.tv.core.tmdb.TmdbEntityBrowseData
 import com.nuvio.tv.core.tmdb.TmdbEntityKind
 import com.nuvio.tv.core.tmdb.TmdbEntityRailType
@@ -104,14 +103,10 @@ class TmdbEntityBrowseViewModel @Inject constructor(
                 val mergedItems = (latestRail.items + pageResult.items)
                     .distinctBy { it.id }
 
-                val pattern = layoutPreferenceDataStore.customPosterUrlPattern.first()
-                val enabledScreens = layoutPreferenceDataStore.customPosterEnabledScreens.first()
                 _uiState.value = TmdbEntityBrowseUiState.Success(
                     latestData.withUpdatedRail(mediaType, railType) {
                         it.copy(
-                            items = mergedItems.withCustomPosterUrls(
-                                com.nuvio.tv.core.poster.patternForScreen(pattern, com.nuvio.tv.core.poster.CustomPosterScreen.DETAILS, enabledScreens)
-                            ),
+                            items = mergedItems,
                             currentPage = nextPage,
                             hasMore = pageResult.hasMore,
                             isLoading = false
@@ -141,11 +136,7 @@ class TmdbEntityBrowseViewModel @Inject constructor(
                     language = language
                 )
                 _uiState.value = if (browseData != null) {
-                    val pattern = layoutPreferenceDataStore.customPosterUrlPattern.first()
-                    val enabledScreens = layoutPreferenceDataStore.customPosterEnabledScreens.first()
-                    TmdbEntityBrowseUiState.Success(browseData.withCustomPosterUrls(
-                        com.nuvio.tv.core.poster.patternForScreen(pattern, com.nuvio.tv.core.poster.CustomPosterScreen.DETAILS, enabledScreens)
-                    ))
+                    TmdbEntityBrowseUiState.Success(browseData)
                 } else {
                     TmdbEntityBrowseUiState.Error(
                         if (entityName.isNotBlank()) {

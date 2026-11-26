@@ -9,6 +9,9 @@ import com.nuvio.tv.data.local.WatchProgressPreferences
 import com.nuvio.tv.data.local.WatchProgressSource
 import com.nuvio.tv.data.local.WatchedItemsPreferences
 import com.nuvio.tv.data.local.WatchedSeriesStateHolder
+import com.nuvio.tv.data.repository.TraktProgressService
+import com.nuvio.tv.data.repository.isTraktCompatibleId
+import com.nuvio.tv.data.simkl.SimklSyncRepository
 import com.nuvio.tv.domain.model.LibrarySourceMode
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -18,8 +21,8 @@ import kotlinx.coroutines.sync.withLock
 @Singleton
 class TrackingSourceController @Inject constructor(
     private val settingsDataStore: TraktSettingsDataStore,
-    private val progressProviders: TrackingProgressProviderRegistry,
-    private val libraryProviders: TrackingLibraryProviderRegistry,
+    private val traktProgressService: TraktProgressService,
+    private val simklSyncRepository: SimklSyncRepository,
     private val startupSyncService: StartupSyncService,
     private val watchedItemsPreferences: WatchedItemsPreferences,
     private val watchProgressPreferences: WatchProgressPreferences,
@@ -75,20 +78,25 @@ class TrackingSourceController @Inject constructor(
         if (profileManager.activeProfileId.value != profileId) return
         continueWatchingEnrichmentCache.saveInProgressSnapshot(emptyList(), force = true)
         continueWatchingEnrichmentCache.saveNextUpSnapshot(emptyList(), force = true)
-        val provider = source.providerId?.let(progressProviders::provider)
-        if (provider != null) {
-            if (provider.clearsLocalProgressOnSelection) {
+        when (source) {
+            WatchProgressSource.TRAKT -> {
                 watchProgressPreferences.clearAllPreservingNonTraktIds(profileId) { contentId ->
-                    provider.retainsLocalProgress(contentId)
+                    !isTraktCompatibleId(contentId)
                 }
+                watchedItemsPreferences.clearAll(profileId)
+                watchedSeriesStateHolder.update(emptySet())
+                traktProgressService.refreshNow()
             }
-            watchedItemsPreferences.clearAll(profileId)
-            watchedSeriesStateHolder.update(emptySet())
-            provider.refresh(TrackingRefreshIntent.USER_INITIATED)
-        } else if (source == WatchProgressSource.NUVIO_SYNC) {
-            repopulateWatchedItemsFromNuvioSync(profileId)
-            if (profileManager.activeProfileId.value == profileId) {
-                startupSyncService.requestSyncNow()
+            WatchProgressSource.SIMKL -> {
+                watchedItemsPreferences.clearAll(profileId)
+                watchedSeriesStateHolder.update(emptySet())
+                simklSyncRepository.refresh(TrackingRefreshIntent.USER_INITIATED)
+            }
+            WatchProgressSource.NUVIO_SYNC -> {
+                repopulateWatchedItemsFromNuvioSync(profileId)
+                if (profileManager.activeProfileId.value == profileId) {
+                    startupSyncService.requestSyncNow()
+                }
             }
         }
     }
@@ -96,7 +104,9 @@ class TrackingSourceController @Inject constructor(
     private suspend fun applyLibrarySourceMode(mode: LibrarySourceMode, profileId: Int) {
         settingsDataStore.setLibrarySourceMode(mode, profileId)
         if (profileManager.activeProfileId.value != profileId) return
-        mode.providerId?.let(libraryProviders::provider)?.refresh(TrackingRefreshIntent.USER_INITIATED)
+        if (mode == LibrarySourceMode.SIMKL) {
+            simklSyncRepository.refresh(TrackingRefreshIntent.USER_INITIATED)
+        }
     }
 
     private suspend fun repopulateWatchedItemsFromNuvioSync(profileId: Int) {

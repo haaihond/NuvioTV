@@ -1,43 +1,66 @@
 package com.nuvio.tv.data.repository
 
+import android.util.Log
 import com.nuvio.tv.core.tmdb.TmdbService
 import com.nuvio.tv.data.local.MDBListSettingsDataStore
-import com.nuvio.tv.data.mdblist.MdbListRatingsClient
-import com.nuvio.tv.data.mdblist.MdbListRatingsDiskCache
-import com.nuvio.tv.data.mdblist.MdbListRatingsLoader
+import com.nuvio.tv.data.remote.api.MDBListApi
+import com.nuvio.tv.data.remote.dto.mdblist.MDBListRatingRequestDto
 import com.nuvio.tv.domain.model.MDBListRatings
 import com.nuvio.tv.domain.model.MDBListRatingsResult
 import com.nuvio.tv.domain.model.MDBListSettings
 import com.nuvio.tv.domain.model.Meta
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private data class MediaRef(val provider: String, val id: String, val mediaType: String)
-
 @Singleton
-class MDBListRepository internal constructor(
-    private val api: MdbListRatingsClient,
+class MDBListRepository @Inject constructor(
+    private val api: MDBListApi,
     private val settingsDataStore: MDBListSettingsDataStore,
-    private val tmdbService: TmdbService,
-    private val ratingsLoader: MdbListRatingsLoader
+    private val tmdbService: TmdbService
 ) {
-    @Inject constructor(
-        api: MdbListRatingsClient,
-        settingsDataStore: MDBListSettingsDataStore,
-        tmdbService: TmdbService,
-        @dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context
-    ) : this(api, settingsDataStore, tmdbService, MdbListRatingsLoader(api, MdbListRatingsDiskCache(context)))
+    private data class CacheEntry(
+        val result: MDBListRatingsResult?,
+        val expiresAtMs: Long
+    )
 
-    fun isAvailable(settings: MDBListSettings): Boolean = settings.enabled && api.credential(settings.apiKey) != null
+    private enum class ProviderType(val apiValue: String) {
+        TRAKT("trakt"),
+        IMDB("imdb"),
+        TMDB("tmdb"),
+        LETTERBOXD("letterboxd"),
+        TOMATOES("tomatoes"),
+        AUDIENCE("audience"),
+        METACRITIC("metacritic"),
+        MAL("mal")
+    }
 
+    private val tag = "MDBListRepository"
+    private val cacheTtlMs = 30L * 60L * 1000L
+    private val cache = ConcurrentHashMap<String, CacheEntry>()
+    private val inFlight = mutableMapOf<String, kotlinx.coroutines.Deferred<MDBListRatingsResult?>>()
+    private val inFlightMutex = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Lightweight helper for home screen enrichment - fetches only the IMDb rating. */
     suspend fun getImdbRatingForItem(itemId: String, itemType: String): Double? {
         val settings = settingsDataStore.settings.first()
         if (!settings.enabled) return null
-        val credential = api.credential(settings.apiKey) ?: return null
+        val apiKey = settings.apiKey.trim()
+        if (apiKey.isBlank()) return null
 
         val mediaType = normalizeMediaType(itemType)
-        val ref = resolveMediaRef(
+        val imdbId = resolveImdbId(
             meta = Meta(
                 id = itemId,
                 type = when (normalizeMediaType(itemType)) {
@@ -67,76 +90,195 @@ class MDBListRepository internal constructor(
             mediaType = mediaType
         ) ?: return null
 
-        return ratingsLoader.getRatings(ref.provider, ref.mediaType, ref.id, credential)?.imdb
+        val cacheKey = "$mediaType:$imdbId:imdb:${apiKey.hashCode()}"
+        val now = System.currentTimeMillis()
+        cache[cacheKey]?.let { cached ->
+            if (cached.expiresAtMs > now) return cached.result?.ratings?.imdb
+            cache.remove(cacheKey)
+        }
+
+        val deferred = inFlightMutex.withLock {
+            inFlight[cacheKey] ?: scope.async {
+                try {
+                    fetchRatings(
+                        imdbId = imdbId,
+                        mediaType = mediaType,
+                        apiKey = apiKey,
+                        providers = listOf(ProviderType.IMDB)
+                    ).also { result ->
+                        cache[cacheKey] = CacheEntry(
+                            result = result,
+                            expiresAtMs = System.currentTimeMillis() + cacheTtlMs
+                        )
+                    }
+                } finally {
+                    inFlightMutex.withLock { inFlight.remove(cacheKey) }
+                }
+            }.also { inFlight[cacheKey] = it }
+        }
+        return deferred.await()?.ratings?.imdb
     }
 
     suspend fun getRatingsForMeta(
-        meta: Meta,
-        fallbackItemId: String,
+        meta: Meta,        fallbackItemId: String,
         fallbackItemType: String
     ): MDBListRatingsResult? {
         val settings = settingsDataStore.settings.first()
         if (!settings.enabled) return null
 
-        val credential = api.credential(settings.apiKey) ?: return null
+        val apiKey = settings.apiKey.trim()
+        if (apiKey.isBlank()) return null
 
-        if (!settings.hasEnabledProviders()) return null
+        val enabledProviders = enabledProviders(settings)
+        if (enabledProviders.isEmpty()) return null
 
         val mediaType = normalizeMediaType(meta.apiType.ifBlank { fallbackItemType })
-        val ref = resolveMediaRef(meta, fallbackItemId, fallbackItemType, mediaType) ?: return null
+        val imdbId = resolveImdbId(meta, fallbackItemId, fallbackItemType, mediaType) ?: return null
 
-        val ratings = ratingsLoader.getRatings(ref.provider, ref.mediaType, ref.id, credential)?.let { allRatings ->
-            MDBListRatings(
-                trakt = allRatings.trakt.takeIf { settings.showTrakt },
-                imdb = allRatings.imdb.takeIf { settings.showImdb },
-                tmdb = allRatings.tmdb.takeIf { settings.showTmdb },
-                letterboxd = allRatings.letterboxd.takeIf { settings.showLetterboxd },
-                tomatoes = allRatings.tomatoes.takeIf { settings.showTomatoes },
-                audience = allRatings.audience.takeIf { settings.showAudience },
-                metacritic = allRatings.metacritic.takeIf { settings.showMetacritic },
-                mal = allRatings.mal.takeIf { settings.showMal },
-                tomatoesCertified = settings.showTomatoes && allRatings.tomatoesCertified,
-                audienceCertified = settings.showAudience && allRatings.audienceCertified
-            )
-        }?.takeUnless { it.isEmpty() } ?: return null
+        val providerHash = enabledProviders.map { it.apiValue }.sorted().joinToString(",")
+        val cacheKey = "$mediaType:$imdbId:$providerHash:${apiKey.hashCode()}"
+        val now = System.currentTimeMillis()
 
-        return MDBListRatingsResult(ratings, hasImdbRating = ratings.imdb != null)
+        cache[cacheKey]?.let { cached ->
+            if (cached.expiresAtMs > now) {
+                return cached.result
+            }
+            cache.remove(cacheKey)
+        }
+
+        val deferred = inFlightMutex.withLock {
+            inFlight[cacheKey] ?: scope.async {
+                try {
+                    fetchRatings(
+                        imdbId = imdbId,
+                        mediaType = mediaType,
+                        apiKey = apiKey,
+                        providers = enabledProviders
+                    ).also { result ->
+                        cache[cacheKey] = CacheEntry(
+                            result = result,
+                            expiresAtMs = System.currentTimeMillis() + cacheTtlMs
+                        )
+                    }
+                } finally {
+                    inFlightMutex.withLock {
+                        inFlight.remove(cacheKey)
+                    }
+                }
+            }.also { created ->
+                inFlight[cacheKey] = created
+            }
+        }
+
+        return deferred.await()
     }
 
-    private fun MDBListSettings.hasEnabledProviders(): Boolean =
-        showTrakt || showImdb || showTmdb || showLetterboxd || showTomatoes || showAudience || showMetacritic || showMal
+    private suspend fun fetchRatings(
+        imdbId: String,
+        mediaType: String,
+        apiKey: String,
+        providers: List<ProviderType>
+    ): MDBListRatingsResult? {
+        val semaphore = Semaphore(4)
+        val requestBody = MDBListRatingRequestDto(
+            ids = listOf(imdbId),
+            provider = "imdb"
+        )
 
-    private suspend fun resolveMediaRef(
+        val results = providers.map { provider ->
+            scope.async {
+                semaphore.withPermit {
+                    fetchProviderRating(
+                        mediaType = mediaType,
+                        provider = provider,
+                        apiKey = apiKey,
+                        requestBody = requestBody
+                    )
+                }
+            }
+        }.awaitAll().toMap()
+
+        val ratings = MDBListRatings(
+            trakt = results[ProviderType.TRAKT],
+            imdb = results[ProviderType.IMDB],
+            tmdb = results[ProviderType.TMDB],
+            letterboxd = results[ProviderType.LETTERBOXD],
+            tomatoes = results[ProviderType.TOMATOES],
+            audience = results[ProviderType.AUDIENCE],
+            metacritic = results[ProviderType.METACRITIC],
+            mal = results[ProviderType.MAL]
+        )
+
+        if (ratings.isEmpty()) return null
+
+        return MDBListRatingsResult(
+            ratings = ratings,
+            hasImdbRating = ratings.imdb != null
+        )
+    }
+
+    private suspend fun fetchProviderRating(
+        mediaType: String,
+        provider: ProviderType,
+        apiKey: String,
+        requestBody: MDBListRatingRequestDto
+    ): Pair<ProviderType, Double?> {
+        return try {
+            val response = api.getRating(
+                mediaType = mediaType,
+                ratingType = provider.apiValue,
+                apiKey = apiKey,
+                body = requestBody
+            )
+
+            if (!response.isSuccessful) {
+                Log.w(tag, "Failed ${provider.apiValue} (${response.code()})")
+                return provider to null
+            }
+
+            val rating = response.body()?.ratings?.firstOrNull()?.rating
+            provider to rating
+        } catch (e: Exception) {
+            Log.w(tag, "Error fetching ${provider.apiValue}", e)
+            provider to null
+        }
+    }
+
+    private fun enabledProviders(settings: MDBListSettings): List<ProviderType> = buildList {
+        if (settings.showTrakt) add(ProviderType.TRAKT)
+        if (settings.showImdb) add(ProviderType.IMDB)
+        if (settings.showTmdb) add(ProviderType.TMDB)
+        if (settings.showLetterboxd) add(ProviderType.LETTERBOXD)
+        if (settings.showTomatoes) add(ProviderType.TOMATOES)
+        if (settings.showAudience) add(ProviderType.AUDIENCE)
+        if (settings.showMetacritic) add(ProviderType.METACRITIC)
+        if (settings.showMal) add(ProviderType.MAL)
+    }
+
+    private suspend fun resolveImdbId(
         meta: Meta,
         fallbackItemId: String,
         fallbackItemType: String,
         mediaType: String
-    ): MediaRef? {
-        // 1. Try IMDB ID first (most reliable).
-        extractImdbId(meta.id)?.let { return MediaRef("imdb", it, mediaType) }
-        extractImdbId(fallbackItemId)?.let { return MediaRef("imdb", it, mediaType) }
-        extractImdbId(meta.imdbId)?.let { return MediaRef("imdb", it, mediaType) }
+    ): String? {
+        extractImdbId(meta.id)?.let { return it }
+        extractImdbId(fallbackItemId)?.let { return it }
 
-        // 2. Try TMDB ID directly — no need to convert to IMDB.
-        val tmdbId = extractPrefixedId(meta.id, "tmdb")
-            ?: extractPrefixedId(fallbackItemId, "tmdb")
+        val tmdbId = extractTmdbId(meta.id)
+            ?: extractTmdbId(fallbackItemId)
+            ?: meta.id.trim().takeIf { it.all(Char::isDigit) }?.toIntOrNull()
+            ?: fallbackItemId.trim().takeIf { it.all(Char::isDigit) }?.toIntOrNull()
 
         if (tmdbId != null) {
-            return MediaRef("tmdb", tmdbId, mediaType)
+            val mapped = tmdbService.tmdbToImdb(tmdbId, fallbackItemType)
+            if (!mapped.isNullOrBlank()) return mapped
         }
 
-        // 3. Try MAL ID — use media_type "any" since MDBList doesn't distinguish
-        //    movie/show for MAL anime entries.
-        val malId = extractPrefixedId(meta.id, "mal")
-            ?: extractPrefixedId(fallbackItemId, "mal")
-        if (malId != null) return MediaRef("mal", malId, "any")
-
-        // 4. Try TVDB ID.
-        val tvdbId = extractPrefixedId(meta.id, "tvdb")
-            ?: extractPrefixedId(fallbackItemId, "tvdb")
-        if (tvdbId != null) return MediaRef("tvdb", tvdbId, mediaType)
-
-        return null
+        val lookupType = if (fallbackItemType.isNotBlank()) fallbackItemType else mediaType
+        val converted = tmdbService.ensureTmdbId(meta.id, lookupType)?.toIntOrNull()?.let { tmdbNumericId ->
+            tmdbService.tmdbToImdb(tmdbNumericId, lookupType)
+        }
+        return converted?.takeIf { it.startsWith("tt") }
     }
 
     private fun extractImdbId(rawId: String?): String? {
@@ -145,11 +287,11 @@ class MDBListRepository internal constructor(
         return regex.find(rawId)?.value
     }
 
-    private fun extractPrefixedId(rawId: String?, prefix: String): String? {
+    private fun extractTmdbId(rawId: String?): Int? {
         if (rawId.isNullOrBlank()) return null
         val trimmed = rawId.trim()
-        if (trimmed.startsWith("$prefix:", ignoreCase = true)) {
-            return trimmed.substringAfter(':').substringBefore(':').takeIf { it.isNotBlank() }
+        if (trimmed.startsWith("tmdb:", ignoreCase = true)) {
+            return trimmed.substringAfter(':').substringBefore(':').toIntOrNull()
         }
         return null
     }

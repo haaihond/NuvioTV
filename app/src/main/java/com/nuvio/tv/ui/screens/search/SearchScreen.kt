@@ -85,9 +85,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.nuvio.tv.ui.util.RtlKeyUtils
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -192,9 +190,6 @@ fun SearchScreen(
         }
     }
     val isVoiceSearchAvailable = remember(context) { SpeechRecognizer.isRecognitionAvailable(context) }
-    val topInputFocusRequester = remember(isVoiceSearchAvailable) {
-        if (isVoiceSearchAvailable) voiceFocusRequester else searchFocusRequester
-    }
     val speechRecognizer = remember(context, isVoiceSearchAvailable) {
         if (isVoiceSearchAvailable) {
             runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
@@ -437,7 +432,7 @@ fun SearchScreen(
     val submitRecentSearch: (String) -> Unit = { recentQuery ->
         val trimmedRecentQuery = recentQuery.trim()
         if (trimmedRecentQuery.isNotEmpty()) {
-            runCatching { topInputFocusRequester.requestFocus() }
+            runCatching { searchFocusRequester.requestFocus() }
             viewModel.onEvent(SearchEvent.QueryChanged(trimmedRecentQuery))
             submitCurrentQuery(trimmedRecentQuery)
         }
@@ -489,7 +484,7 @@ fun SearchScreen(
         pendingFocusMoveHadExistingSearchRows = false
     }
 
-    val initialFocusRequester = topInputFocusRequester
+    val initialFocusRequester = if (isVoiceSearchAvailable) voiceFocusRequester else searchFocusRequester
 
     LaunchedEffect(Unit) {
         if (viewModel.hasSavedSearchFocus) return@LaunchedEffect
@@ -1382,9 +1377,6 @@ private fun SearchInputField(
                     color = NuvioTheme.colors.TextTertiary
                 )
             },
-            textStyle = TextStyle(
-                textDirection = TextDirection.Content
-            ),
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = NuvioTheme.colors.BackgroundCard,
                 unfocusedContainerColor = NuvioTheme.colors.BackgroundCard,

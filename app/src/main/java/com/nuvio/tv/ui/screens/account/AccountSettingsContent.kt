@@ -3,7 +3,6 @@
 package com.nuvio.tv.ui.screens.account
 
 import com.nuvio.tv.ui.theme.NuvioTheme
-import com.nuvio.tv.ui.util.contentTextDirection
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -307,9 +306,7 @@ private fun ProfileSyncRow(profile: ProfileSyncStats) {
 
         Text(
             text = profile.profileName,
-            style = MaterialTheme.typography.bodySmall.copy(
-                textDirection = profile.profileName.contentTextDirection()
-            ),
+            style = MaterialTheme.typography.bodySmall,
             color = NuvioTheme.colors.TextPrimary,
             fontWeight = FontWeight.Medium,
             maxLines = 1,

@@ -24,12 +24,10 @@ data class AdvancedSettingsUiState(
     val playbackIssueReportsEnabled: Boolean = false,
     val playerStatsHudEnabled: Boolean = false,
     val rgb565Enabled: Boolean = true,
-    val sentryEnabled: Boolean = true,
-    val usenet: com.nuvio.tv.core.usenet.UsenetConfiguration = com.nuvio.tv.core.usenet.UsenetConfiguration()
+    val sentryEnabled: Boolean = true
 )
 
 sealed class AdvancedSettingsEvent {
-    data class SetUsenet(val configuration: com.nuvio.tv.core.usenet.UsenetConfiguration) : AdvancedSettingsEvent()
     data class SetFastHorizontalNavigationEnabled(val enabled: Boolean) : AdvancedSettingsEvent()
     data class SetSmoothBringIntoViewEnabled(val enabled: Boolean) : AdvancedSettingsEvent()
     data class SetComposeHighlighterEnabled(val enabled: Boolean) : AdvancedSettingsEvent()
@@ -46,16 +44,12 @@ class AdvancedSettingsViewModel @Inject constructor(
     private val deviceLocalPlayerPreferences: DeviceLocalPlayerPreferences,
     private val sentrySettingsDataStore: SentrySettingsDataStore,
     private val imagePerformancePreferences: ImagePerformancePreferences,
-    private val appRestarter: AppRestarter,
-    private val usenetSettings: com.nuvio.tv.core.usenet.UsenetSettings
+    private val appRestarter: AppRestarter
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AdvancedSettingsUiState())
     val uiState: StateFlow<AdvancedSettingsUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            usenetSettings.settings.collectLatest { configuration -> _uiState.update { it.copy(usenet = configuration) } }
-        }
         _uiState.update { it.copy(rgb565Enabled = imagePerformancePreferences.rgb565Enabled) }
         viewModelScope.launch {
             layoutPreferenceDataStore.fastHorizontalNavigationEnabled.collectLatest { enabled ->
@@ -91,7 +85,6 @@ class AdvancedSettingsViewModel @Inject constructor(
 
     fun onEvent(event: AdvancedSettingsEvent) {
         when (event) {
-            is AdvancedSettingsEvent.SetUsenet -> usenetSettings.update(event.configuration)
             is AdvancedSettingsEvent.SetFastHorizontalNavigationEnabled -> {
                 viewModelScope.launch {
                     layoutPreferenceDataStore.setFastHorizontalNavigationEnabled(event.enabled)

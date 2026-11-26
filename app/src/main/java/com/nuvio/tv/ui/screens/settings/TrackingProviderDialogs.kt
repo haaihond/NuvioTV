@@ -266,7 +266,7 @@ internal fun SimklAccountDialog(
 }
 
 @Composable
-internal fun TrackingDeviceAuthContent(
+private fun TrackingDeviceAuthContent(
     providerName: String,
     logo: Painter,
     logoContentDescription: String,
@@ -284,10 +284,9 @@ internal fun TrackingDeviceAuthContent(
     missingCredentialsMessage: String,
     onStartConnection: () -> Unit,
     onRetryPolling: () -> Unit,
-    onDismiss: () -> Unit,
-    logoLabel: String? = null
+    onDismiss: () -> Unit
 ) {
-    TrackingProviderWordmark(logo, logoContentDescription, logoLabel)
+    TrackingProviderWordmark(logo, logoContentDescription)
     when {
         isLoading -> {
             Row(
@@ -442,7 +441,7 @@ internal fun TrackingDeviceAuthContent(
 }
 
 @Composable
-internal fun ConnectedTrackingAccountDialog(
+private fun ConnectedTrackingAccountDialog(
     brand: TrackingDialogBrand,
     glyph: Painter,
     onDismiss: () -> Unit,
@@ -476,7 +475,7 @@ internal fun ConnectedTrackingAccountDialog(
 }
 
 @Composable
-internal fun ConnectedTrackingAccountContent(
+private fun ConnectedTrackingAccountContent(
     brand: TrackingDialogBrand,
     logo: Painter,
     logoContentDescription: String,
@@ -652,13 +651,6 @@ private fun TrackingConnectedWordmark(
     logo: Painter,
     contentDescription: String
 ) {
-    if (brand == TrackingDialogBrand.MDBLIST) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Image(painter = logo, contentDescription = null, modifier = Modifier.size(40.dp))
-            Text(stringResource(R.string.mdblist_name), color = Color.White, style = MaterialTheme.typography.headlineSmall)
-        }
-        return
-    }
     Image(
         painter = logo,
         contentDescription = contentDescription,
@@ -669,7 +661,6 @@ private fun TrackingConnectedWordmark(
             TrackingDialogBrand.SIMKL -> Modifier
                 .width(124.dp)
                 .height(30.dp)
-            TrackingDialogBrand.MDBLIST -> Modifier.size(40.dp)
         },
         contentScale = ContentScale.Fit,
         alignment = Alignment.CenterStart
@@ -798,20 +789,8 @@ private fun TrackingBrandMessage(
 @Composable
 private fun TrackingProviderWordmark(
     logo: Painter,
-    contentDescription: String,
-    label: String? = null
+    contentDescription: String
 ) {
-    if (label != null) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
-        ) {
-            Image(painter = logo, contentDescription = null, modifier = Modifier.size(40.dp))
-            Text(label, color = NuvioTheme.colors.TextPrimary, style = MaterialTheme.typography.headlineSmall)
-        }
-        return
-    }
     Image(
         painter = logo,
         contentDescription = contentDescription,
@@ -822,10 +801,9 @@ private fun TrackingProviderWordmark(
     )
 }
 
-internal enum class TrackingDialogBrand {
+private enum class TrackingDialogBrand {
     TRAKT,
-    SIMKL,
-    MDBLIST
+    SIMKL
 }
 
 private fun TrackingDialogBrand.cardBrush(): Brush = when (this) {
@@ -834,9 +812,6 @@ private fun TrackingDialogBrand.cardBrush(): Brush = when (this) {
     )
     TrackingDialogBrand.SIMKL -> Brush.linearGradient(
         colors = listOf(Color(0xFF050505), Color(0xFF292929), Color(0xFF111111))
-    )
-    TrackingDialogBrand.MDBLIST -> Brush.linearGradient(
-        colors = listOf(Color(0xFF173D69), Color(0xFF225C97), Color(0xFF16385D))
     )
 }
 

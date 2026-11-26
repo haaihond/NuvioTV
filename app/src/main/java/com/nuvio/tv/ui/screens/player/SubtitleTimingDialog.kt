@@ -67,7 +67,6 @@ private val ASS_OVERRIDE_TAG_REGEX = Regex("""\{\\[^{}]*\}""")
 internal fun SubtitleTimingDialog(
     modifier: Modifier = Modifier,
     currentPositionMs: Long,
-    subtitleDelayMs: Int,
     selectedAddonSubtitle: Subtitle?,
     cues: List<SubtitleSyncCue>,
     capturedVideoMs: Long?,
@@ -78,8 +77,7 @@ internal fun SubtitleTimingDialog(
     onCueSelected: (SubtitleSyncCue) -> Unit
 ) {
     val syncButtonFocusRequester = remember { FocusRequester() }
-    val rawAnchorMs = capturedVideoMs ?: currentPositionMs
-    val anchorMs = (rawAnchorMs - subtitleDelayMs).coerceAtLeast(0L)
+    val anchorMs = capturedVideoMs ?: currentPositionMs
     val visibleCues = remember(cues, anchorMs) {
         selectAutoSyncVisibleCues(
             cues = cues,

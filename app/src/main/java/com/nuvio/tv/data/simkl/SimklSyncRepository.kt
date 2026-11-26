@@ -203,26 +203,20 @@ class SimklSyncRepository @Inject constructor(
             return@withLock
         }
         if (!isCurrent(profileId, generation)) return@withLock
-        // Simkl publishes a new position on /sync/playback a moment after it answers a stop or a
-        // pause, so a read that follows the user's own write can still describe the previous viewing.
-        // Keep our own newer rows over the fetched ones; the account stays authoritative for the rest.
-        val merged = result.copy(
-            playback = mergeFetchedPlayback(result.playback, previous.snapshot.playback)
-        )
         val projection = if (
-            merged.entries === previous.snapshot.entries &&
-            merged.playback === previous.snapshot.playback
+            result.entries === previous.snapshot.entries &&
+            result.playback === previous.snapshot.playback
         ) {
             _projection.value
         } else {
-            buildProjection(merged)
+            buildProjection(result)
         }
-        authRepository.synchronizeUserSettings(merged.activities?.settings?.all)
+        authRepository.synchronizeUserSettings(result.activities?.settings?.all)
         if (!isCurrent(profileId, generation)) return@withLock
-        storage.save(profileId, encodeSnapshot(merged))
+        storage.save(profileId, encodeSnapshot(result))
         if (isCurrent(profileId, generation)) {
             _projection.value = projection
-            _state.value = SimklSyncState(snapshot = merged, hasLoaded = true)
+            _state.value = SimklSyncState(snapshot = result, hasLoaded = true)
         }
     }
 

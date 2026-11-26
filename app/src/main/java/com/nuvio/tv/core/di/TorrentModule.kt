@@ -1,6 +1,8 @@
 package com.nuvio.tv.core.di
 
 import android.content.Context
+import com.nuvio.tv.core.torrent.TorrServerApi
+import com.nuvio.tv.core.torrent.TorrServerBinary
 import com.nuvio.tv.core.torrent.TorrentService
 import com.nuvio.tv.core.torrent.TorrentSettings
 import dagger.Module
@@ -22,8 +24,21 @@ object TorrentModule {
 
     @Provides
     @Singleton
+    fun provideTorrServerBinary(
+        @ApplicationContext context: Context
+    ): TorrServerBinary = TorrServerBinary(context)
+
+    @Provides
+    @Singleton
+    fun provideTorrServerApi(
+        binary: TorrServerBinary
+    ): TorrServerApi = TorrServerApi(binary)
+
+    @Provides
+    @Singleton
     fun provideTorrentService(
-        @ApplicationContext context: Context,
-        torrentSettings: TorrentSettings
-    ): TorrentService = TorrentService(context, torrentSettings)
+        @dagger.hilt.android.qualifiers.ApplicationContext appContext: android.content.Context,
+        binary: TorrServerBinary,
+        api: TorrServerApi
+    ): TorrentService = TorrentService(appContext, binary, api)
 }

@@ -25,7 +25,6 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
         performPendingMpvHardRestartIfNeeded(view)
         view.applyHi10pGnextSoftwareFallback(shouldUseMpvHi10pGnextSoftwareFallback())
         view.applyHardwareDecodeMode(mpvHardwareDecodeModeSetting)
-        registerMpvEventRelay(view)
         view.setMedia(currentStreamUrl, currentHeaders)
         view.setPlaybackSpeed(_uiState.value.playbackSpeed)
         view.applyAudioAmplificationDb(_uiState.value.audioAmplificationDb)
@@ -39,7 +38,7 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
         view.applyBluetoothAudioRoute(currentAudioOutputRoute?.isBluetooth == true)
         view.setAudioDelayMs(_uiState.value.audioDelayMs)
         view.applyAspectMode(_uiState.value.aspectMode)
-        view.setPaused(streamFallbackResumePosition != null && userPausedManually)
+        view.setPaused(false)
         applyPendingMpvSeekIfNeeded(view)
         hasRenderedFirstFrame = false
         endDetectionArmed = false
@@ -59,13 +58,7 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
         scheduleHideControls()
         emitScrobbleStart()
     }.onFailure {
-        val technical = it.message?.trim()?.takeIf { message -> message.isNotEmpty() }
-        val explanation = context.getString(com.nuvio.tv.R.string.player_error_mpv_surface_failed)
-        val detailedError = if (technical == null || technical.equals(explanation, ignoreCase = true)) {
-            explanation
-        } else {
-            "$explanation\n\n$technical"
-        }
+        val detailedError = it.message ?: context.getString(com.nuvio.tv.R.string.player_error_mpv_surface_failed)
         if (
             maybeAutoSwitchInternalPlayerOnStartupError(
                 detailedError = detailedError,
@@ -74,7 +67,6 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
         ) {
             return@onFailure
         }
-        if (tryNextStream(detailedError)) return@onFailure
         cancelNextEpisodeAutoPlayOnFatalError()
         _uiState.update { state ->
             state.copy(
@@ -130,7 +122,6 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
         performPendingMpvHardRestartIfNeeded(view)
         view.applyHi10pGnextSoftwareFallback(shouldUseMpvHi10pGnextSoftwareFallback())
         view.applyHardwareDecodeMode(mpvHardwareDecodeModeSetting)
-        registerMpvEventRelay(view)
         val initialResumePosition = resolvePendingInitialResumePosition()
             .takeIf { it > 0L }
             ?: (_uiState.value.pendingSeekPosition?.coerceAtLeast(0L) ?: 0L)
@@ -157,7 +148,7 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
         view.applyBluetoothAudioRoute(currentAudioOutputRoute?.isBluetooth == true)
         view.setAudioDelayMs(_uiState.value.audioDelayMs)
         view.applyAspectMode(_uiState.value.aspectMode)
-        view.setPaused(streamFallbackResumePosition != null && userPausedManually)
+        view.setPaused(false)
         applyPendingMpvSeekIfNeeded(view)
 
         hasRenderedFirstFrame = false
@@ -183,13 +174,7 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
         emitScrobbleStart()
     }.onFailure { error ->
         Log.e(PlayerRuntimeController.TAG, "libmpv initialize failed: ${error.message}", error)
-        val technical = error.message?.trim()?.takeIf { it.isNotEmpty() }
-        val explanation = context.getString(com.nuvio.tv.R.string.player_error_mpv_playback_failed)
-        val detailedError = if (technical == null || technical.equals(explanation, ignoreCase = true)) {
-            explanation
-        } else {
-            "$explanation\n\n$technical"
-        }
+        val detailedError = error.message ?: context.getString(com.nuvio.tv.R.string.player_error_mpv_playback_failed)
         if (
             maybeAutoSwitchInternalPlayerOnStartupError(
                 detailedError = detailedError,
@@ -198,7 +183,6 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
         ) {
             return@onFailure
         }
-        if (tryNextStream(detailedError)) return@onFailure
         cancelNextEpisodeAutoPlayOnFatalError()
         _uiState.update {
             it.copy(
@@ -213,7 +197,6 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
 }
 
 internal fun PlayerRuntimeController.releaseMpvPlayer() {
-    unregisterMpvEventRelay()
     runCatching { mpvView?.releasePlayer() }
 }
 
@@ -224,14 +207,6 @@ private fun String.safeMpvTraceHost(): String {
 }
 
 internal fun PlayerRuntimeController.pauseForLifecycle() {
-    cancelStreamFallback(showError = true)
-    if (streamFallbackSession != null && debridResolveJob?.isActive == true) {
-        debridResolveJob?.cancel()
-        debridResolveJob = null
-        _uiState.update {
-            it.copy(isLoadingSourceStreams = false, isLoadingEpisodeStreams = false, showLoadingOverlay = false)
-        }
-    }
     // Mark we're in background so onPlayerError can defer recovery to onResume.
     isInBackground = true
 

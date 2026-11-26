@@ -2,15 +2,12 @@ package com.nuvio.tv.data.repository
 
 import android.content.Context
 import com.nuvio.tv.core.network.NetworkResult
-import com.nuvio.tv.data.local.LayoutPreferenceDataStore
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.dto.CatalogResponseDto
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import io.mockk.coEvery
-import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -38,14 +35,9 @@ class CatalogRepositoryMalformedEntryTest {
         val response = moshi.adapter(CatalogResponseDto::class.java).fromJson(payload)!!
         val api = mockk<AddonApi>()
         coEvery { api.getCatalog(any()) } returns Response.success(response)
-        val layoutPrefs = mockk<LayoutPreferenceDataStore> {
-            every { customPosterUrlPattern } returns flowOf("")
-            every { customPosterEnabledScreens } returns flowOf(com.nuvio.tv.core.poster.CustomPosterScreen.ALL)
-        }
         val repository = CatalogRepositoryImpl(
             context = mockk<Context>(relaxed = true),
-            api = api,
-            layoutPreferenceDataStore = layoutPrefs
+            api = api
         )
 
         val result = repository.getCatalog(

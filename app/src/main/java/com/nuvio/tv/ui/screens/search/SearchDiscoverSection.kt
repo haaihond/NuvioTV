@@ -55,11 +55,8 @@ import com.nuvio.tv.ui.screens.detail.requestFocusAfterFrames
 import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
-import com.nuvio.tv.ui.util.contentTextDirection
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -381,9 +378,7 @@ private fun DiscoverDropdownPicker(
                 ) {
                     Text(
                         text = value,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            textDirection = value.contentTextDirection()
-                        ),
+                        style = MaterialTheme.typography.titleMedium,
                         color = NuvioTheme.colors.TextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -456,10 +451,7 @@ private fun DiscoverDropdownPicker(
                             text = option.label,
                             color = itemTextColor,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = TextStyle(
-                                textDirection = option.label.contentTextDirection()
-                            )
+                            overflow = TextOverflow.Ellipsis
                         )
                     },
                     onClick = { onSelect(option) },
@@ -528,7 +520,6 @@ internal fun DiscoverGrid(
     val totalCells = items.size + if (actionType != DiscoverGridAction.None) 1 else 0
     val hasActionCell = actionType != DiscoverGridAction.None
 
-    val globalLandscape = com.nuvio.tv.ui.components.LocalLandscapePosterMode.current
     val adaptiveStyle = remember(posterCardStyle) {
         val cardWidth = posterCardStyle.width
         posterCardStyle.copy(
@@ -600,9 +591,7 @@ internal fun DiscoverGrid(
 
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Adaptive(
-            minSize = if (globalLandscape) posterCardStyle.height else adaptiveStyle.width
-        ),
+        columns = GridCells.Adaptive(minSize = adaptiveStyle.width),
         modifier = Modifier.fillMaxSize()
             .focusRestorer { focusedItemRequester }
             .dpadVerticalFastScroll(
@@ -749,18 +738,15 @@ private fun DiscoverActionCard(
         DiscoverGridAction.None -> ""
     }
     val cardDepthStyle = LocalCardDepthStyle.current
-    val globalLandscape = com.nuvio.tv.ui.components.LocalLandscapePosterMode.current
 
     Column(
-        modifier = modifier.then(if (globalLandscape) Modifier.fillMaxWidth() else Modifier.width(posterCardStyle.width))
+        modifier = modifier.width(posterCardStyle.width)
     ) {
         Card(
             onClick = onClick,
             modifier = Modifier
-                .then(
-                    if (globalLandscape) Modifier.fillMaxWidth().aspectRatio(com.nuvio.tv.domain.model.PosterShape.LANDSCAPE.aspectRatio())
-                    else Modifier.width(posterCardStyle.width).height(posterCardStyle.height)
-                )
+                .width(posterCardStyle.width)
+                .height(posterCardStyle.height)
                 .focusProperties { canFocus = actionType != DiscoverGridAction.Loading }
                 .onPreviewKeyEvent { event ->
                     actionType != DiscoverGridAction.None &&
@@ -811,7 +797,7 @@ private fun DiscoverActionCard(
         // Reserve space for label to match GridContentCard height
         Spacer(
             modifier = Modifier
-                .then(if (globalLandscape) Modifier.fillMaxWidth() else Modifier.width(posterCardStyle.width))
+                .width(posterCardStyle.width)
                 .padding(top = NuvioTheme.spacing.sm)
                 .height(MaterialTheme.typography.titleMedium.lineHeight.value.dp)
         )

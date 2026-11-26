@@ -32,8 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -87,7 +85,6 @@ fun CatalogOrderScreen(
                     color = NuvioTheme.colors.TextSecondary
                 )
                 Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
-                val followAddonsLabel = stringResource(R.string.catalog_order_follow_addons)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -95,7 +92,7 @@ fun CatalogOrderScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = followAddonsLabel,
+                            text = stringResource(R.string.catalog_order_follow_addons),
                             style = MaterialTheme.typography.titleMedium,
                             color = NuvioTheme.colors.TextPrimary
                         )
@@ -108,7 +105,6 @@ fun CatalogOrderScreen(
                     Switch(
                         checked = uiState.followAddonsOrder,
                         onCheckedChange = { viewModel.toggleFollowAddonsOrder(it) },
-                        modifier = Modifier.semantics { contentDescription = followAddonsLabel },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = NuvioTheme.colors.Primary,
                             checkedTrackColor = NuvioTheme.colors.Primary.copy(alpha = 0.5f)

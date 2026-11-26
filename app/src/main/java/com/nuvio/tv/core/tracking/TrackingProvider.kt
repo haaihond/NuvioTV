@@ -6,8 +6,7 @@ import javax.inject.Singleton
 
 enum class TrackingProviderId(val storageId: String) {
     TRAKT("trakt"),
-    SIMKL("simkl"),
-    MDBLIST("mdblist");
+    SIMKL("simkl");
 
     companion object {
         fun fromStorage(value: String?): TrackingProviderId? {

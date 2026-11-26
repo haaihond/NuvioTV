@@ -89,7 +89,6 @@ data class PlayerUiState(
     val loadingIssueElapsedMs: Long = 0L,
     val pauseOverlayEnabled: Boolean = true,
     val osdClockEnabled: Boolean = true,
-    val transparentLetterbox: Boolean = false,
     val playerStatsHudEnabled: Boolean = false,
     val playerStatsHudButtonAvailable: Boolean = false,
     val showPauseOverlay: Boolean = false,
@@ -176,7 +175,6 @@ data class PlayerUiState(
     val parentalGuideHasShown: Boolean = false,
     // Skip intro
     val activeSkipInterval: SkipInterval? = null,
-    val activeSkipTargetsPostCredits: Boolean = false,
     val skipIntervalDismissed: Boolean = false,
     // Next episode card
     val nextEpisode: NextEpisodeInfo? = null,
@@ -205,7 +203,6 @@ data class PlayerUiState(
     // Aspect ratio / resize mode
     val resizeMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT,
     val aspectMode: AspectMode = AspectMode.ORIGINAL,
-    val tunneledSurfaceFill: Boolean = false,
     val tunnelingEnabled: Boolean = false,
     val showAspectRatioIndicator: Boolean = false,
     val aspectRatioIndicatorText: String = "",
@@ -226,8 +223,7 @@ data class PlayerUiState(
     val torrentBufferingProgress: Float = 0f,
     // When true, suppress all torrent stats text (buffer, seeds, peers, speed)
     // from loading overlay, rebuffering indicator, and corner overlay.
-    val hideTorrentStats: Boolean = true,
-    val isLive: Boolean = false
+    val hideTorrentStats: Boolean = true
 )
 
 data class PlaybackTimelineState(
@@ -262,7 +258,6 @@ data class NextEpisodeInfo(
     val overview: String?,
     val released: String?,
     val hasAired: Boolean,
-    val available: Boolean? = null,
     val unairedMessage: String?,
     val isOtherType: Boolean = false
 )

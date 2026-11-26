@@ -32,7 +32,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
@@ -128,9 +127,7 @@ internal fun UpdateBanner(
             ) {
                 Text(
                     text = updateLabel,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        textDirection = TextDirection.Ltr
-                    ),
+                    style = MaterialTheme.typography.titleMedium,
                     color = NuvioTheme.colors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,

@@ -3,14 +3,13 @@ package com.nuvio.tv.core.debrid
 import com.nuvio.tv.data.remote.dto.TorboxTorrentFileDto
 import com.nuvio.tv.domain.model.StreamClientResolve
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TorboxFileSelectorTest {
     private val selector = TorboxFileSelector()
 
     @Test
-    fun `does not treat torrent index as torbox file id`() {
+    fun `selects file by torbox file id first`() {
         val selected = selector.selectFile(
             files = listOf(
                 file(id = 1, name = "wrong.mkv", size = 20),
@@ -21,7 +20,7 @@ class TorboxFileSelectorTest {
             episode = null
         )
 
-        assertNull(selected)
+        assertEquals(9, selected?.id)
     }
 
     @Test
@@ -70,30 +69,6 @@ class TorboxFileSelectorTest {
         assertEquals(3, selected?.id)
     }
 
-    @Test
-    fun `matches absolute path when full name is missing`() {
-        val files = listOf(
-            TorboxTorrentFileDto(id = 1, absolutePath = "/Show/Season 1/Episode.mkv", shortName = "Episode.mkv"),
-            TorboxTorrentFileDto(id = 2, absolutePath = "/Show/Season 2/Episode.mkv", shortName = "Episode.mkv"),
-        )
-
-        assertEquals(
-            2,
-            selector.selectFile(files, resolve(null, "Season 2/Episode.mkv"), null, null)?.id,
-        )
-    }
-
-    @Test
-    fun `supports short name only and video mime without extension`() {
-        val files = listOf(
-            TorboxTorrentFileDto(id = 1, shortName = "Show.S01E01.mkv"),
-            TorboxTorrentFileDto(id = 2, name = "Show.S01E02", mimeType = "VIDEO/MATROSKA"),
-        )
-
-        assertEquals(1, selector.selectFile(files, resolve(null, "Show.S01E01.mkv"), null, null)?.id)
-        assertEquals(2, selector.selectFile(files, resolve(null), 1, 2)?.id)
-    }
-
     private fun file(id: Int, name: String, size: Long): TorboxTorrentFileDto = TorboxTorrentFileDto(
         id = id,
         name = name,
@@ -118,8 +93,8 @@ class TorboxFileSelectorTest {
         mediaId = "tt1:1:2",
         mediaOnlyId = "tt1",
         title = "show",
-        season = null,
-        episode = null,
+        season = 1,
+        episode = 2,
         service = "torbox",
         serviceIndex = 0,
         serviceExtension = null,

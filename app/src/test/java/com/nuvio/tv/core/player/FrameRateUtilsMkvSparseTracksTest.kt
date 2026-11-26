@@ -126,7 +126,7 @@ class FrameRateUtilsMkvSparseTracksTest {
             )
 
             val bytes = tempFile.readBytes()
-            val stub = MatroskaAfrProbe.buildMinimalStubCluster()
+            val stub = MatroskaAfrProbe.buildElement(MatroskaAfrProbe.ID_CLUSTER, ByteArray(0))
             assertArrayEquals(
                 "Probe file must end with a stub Cluster after the sparse Tracks fetch",
                 stub,

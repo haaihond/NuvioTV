@@ -1,6 +1,5 @@
 package com.nuvio.tv.ui.screens.home
 
-import com.nuvio.tv.domain.model.catalogRowLegacyKey
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -109,7 +108,6 @@ internal fun ModernHomeRowsList(
     trailerPreviewUrls: StableMap<String, String>,
     trailerPreviewAudioUrls: StableMap<String, String>,
     useLandscapePosters: Boolean,
-    alwaysShowLandscapeClearlogo: Boolean = false,
     showLabels: Boolean,
     posterCardCornerRadius: Dp,
     focusedPosterBackdropTrailerMuted: Boolean,
@@ -235,11 +233,7 @@ internal fun ModernHomeRowsList(
             for (idx in firstVisible.coerceAtLeast(0)..(lastVisible + prefetchAheadForLazy)) {
                 val row = rows.list.getOrNull(idx) ?: continue
                 if (row.isLoading && row.items.list.firstOrNull()?.imageUrl.isPlaceholder()) {
-                    val legacyKey = catalogRowLegacyKey(
-                        row.addonId ?: continue,
-                        row.apiType ?: continue,
-                        row.catalogId ?: continue
-                    )
+                    val legacyKey = "${row.addonId}_${row.apiType}_${row.catalogId}"
                     latestOnRequestLazyCatalogLoad.value(legacyKey)
                 }
             }
@@ -430,7 +424,6 @@ internal fun ModernHomeRowsList(
                     rowTitleBottom = 14.dp, // rowTitleBottom
                     defaultBringIntoViewSpec = defaultBringIntoViewSpec,
                     focusStateCatalogRowScrollIndex = focusState.catalogRowScrollStates[row.key] ?: 0,
-                    focusStateCatalogRowScrollAnchor = focusState.catalogRowScrollAnchors[row.key],
                     focusedItemByRow = focusedItemByRow,
                     rowListStates = rowListStates,
                     loadMoreRequestedTotals = loadMoreRequestedTotals,
@@ -440,7 +433,6 @@ internal fun ModernHomeRowsList(
                     onPendingRowFocusCleared = onPendingRowFocusCleared,
                     onRowItemFocused = stableOnRowItemFocused,
                     useLandscapePosters = useLandscapePosters,
-                    alwaysShowLandscapeClearlogo = alwaysShowLandscapeClearlogo,
                     showLabels = showLabels,
                     posterCardCornerRadius = posterCardCornerRadius,
                     focusedPosterBackdropTrailerMuted = focusedPosterBackdropTrailerMuted,

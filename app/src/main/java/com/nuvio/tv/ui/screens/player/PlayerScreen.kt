@@ -124,7 +124,6 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import androidx.compose.ui.res.stringResource
 import com.nuvio.tv.R
-import com.nuvio.tv.core.player.PlayerWindowBackdrop
 import com.nuvio.tv.ui.util.localizeEpisodeTitle
 import com.nuvio.tv.data.local.InternalPlayerEngine
 import com.nuvio.tv.data.local.LibassRenderType
@@ -145,27 +144,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.media3.exoplayer.ExoPlayer
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
 import kotlin.math.abs
-
-private fun PlayerUiState.returnFocusSeasonEpisode(completed: Boolean): Pair<Int?, Int?> {
-    val next = nextEpisode?.takeIf {
-        it.hasAired && !(it.released.isNullOrBlank() && it.available == false)
-    }
-    return if (completed && next != null) {
-        next.season to next.episode
-    } else {
-        currentSeason to currentEpisode
-    }
-}
-
-internal fun playerBackTreatsSkipAsAutoPlay(
-    streamAutoPlayMode: StreamAutoPlayMode,
-    preferBingeGroupForNextEpisode: Boolean
-): Boolean = streamAutoPlayMode != StreamAutoPlayMode.MANUAL || preferBingeGroupForNextEpisode
-
-internal fun playerBackOpensCurrentEpisodeStreams(
-    episodeChangedInPlace: Boolean,
-    autoPlayEnabled: Boolean
-): Boolean = episodeChangedInPlace && !autoPlayEnabled
 
 @Composable
 fun PlayerScreen(
@@ -194,7 +172,6 @@ fun PlayerScreen(
     val postPlayRecommendationPlayerWindowFocusRequester = remember { FocusRequester() }
     var skipButtonActuallyVisible by remember { mutableStateOf(false) }
     var restoreStreamInfoFocus by remember { mutableStateOf(false) }
-    var focusPlayAfterMoreBack by remember { mutableStateOf(false) }
     val nextEpisodeFocusRequester = remember { FocusRequester() }
     var subtitleDelayFocusTarget by remember { mutableStateOf(SubtitleDelayFocusTarget.SLIDER) }
     val subtitleDelayResetFocusRequester = remember { FocusRequester() }
@@ -203,10 +180,6 @@ fun PlayerScreen(
     var reportCodeVisible by remember { mutableStateOf(false) }
     var exitDispatched by remember { mutableStateOf(false) }
     var externalHandoffInProgress by remember { mutableStateOf(false) }
-    val autoPlayEnabledForBack = playerBackTreatsSkipAsAutoPlay(
-        streamAutoPlayMode = uiState.streamAutoPlayMode,
-        preferBingeGroupForNextEpisode = uiState.streamAutoPlayPreferBingeGroupForNextEpisode
-    )
 
     val exitPlayer: () -> Unit = exitPlayer@{
         if (exitDispatched) return@exitPlayer
@@ -217,14 +190,7 @@ fun PlayerScreen(
             (!timeline.isLive &&
                 timeline.duration > 0L &&
                 (timeline.currentPosition.toFloat() / timeline.duration.toFloat()) >= WatchProgress.COMPLETED_THRESHOLD)
-        val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed)
-        onBackPress(
-            uiState.currentVideoId,
-            focusSeason,
-            focusEpisode,
-            autoPlayEnabledForBack,
-            completed
-        )
+        onBackPress(uiState.currentVideoId, uiState.currentSeason, uiState.currentEpisode, uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL, completed)
     }
     val exitPlayerFromError: () -> Unit = exitPlayerFromError@{
         if (exitDispatched) return@exitPlayerFromError
@@ -243,9 +209,7 @@ fun PlayerScreen(
     val currentOnBackPress by rememberUpdatedState(onBackPress)
     val currentOnPlayRecommendation by rememberUpdatedState(onPlayRecommendation)
     val currentOnOpenRecommendationDetails by rememberUpdatedState(onOpenRecommendationDetails)
-    val nextEpisodeForEndPrompt = uiState.nextEpisode?.takeIf {
-        it.hasAired && !(it.released.isNullOrBlank() && it.available == false)
-    }
+    val nextEpisodeForEndPrompt = uiState.nextEpisode?.takeIf { it.hasAired }
     val shouldConfirmNextEpisodeOnEnd =
         uiState.playbackEnded &&
             uiState.error == null &&
@@ -255,11 +219,10 @@ fun PlayerScreen(
             nextEpisodeForEndPrompt != null
     val returnToDetailsFromEndPrompt = {
         viewModel.stopAndRelease()
-        val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed = true)
         currentOnBackPress(
             uiState.currentVideoId,
-            focusSeason,
-            focusEpisode,
+            uiState.currentSeason,
+            uiState.currentEpisode,
             true,
             true
         )
@@ -272,11 +235,10 @@ fun PlayerScreen(
             if (cb != null) {
                 cb(next.videoId, next.season, next.episode, null)
             } else {
-                val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed = true)
                 currentOnBackPress(
                     uiState.currentVideoId,
-                    focusSeason,
-                    focusEpisode,
+                    uiState.currentSeason,
+                    uiState.currentEpisode,
                     false,
                     true
                 )
@@ -316,7 +278,6 @@ fun PlayerScreen(
         } else if (uiState.showPauseOverlay) {
             viewModel.onEvent(PlayerEvent.OnDismissPauseOverlay)
         } else if (uiState.showMoreDialog) {
-            focusPlayAfterMoreBack = true
             viewModel.onEvent(PlayerEvent.OnDismissMoreDialog)
         } else if (uiState.showSubtitleTimingDialog) {
             viewModel.onEvent(PlayerEvent.OnDismissSubtitleTimingDialog)
@@ -336,9 +297,7 @@ fun PlayerScreen(
             } else {
                 viewModel.onEvent(PlayerEvent.OnDismissEpisodesPanel)
             }
-        } else if (uiState.postPlayMode is PostPlayMode.AutoPlay &&
-            postPlayRecommendationState.recommendation == null
-        ) {
+        } else if (uiState.postPlayMode is PostPlayMode.AutoPlay) {
             viewModel.onEvent(PlayerEvent.OnDismissNextEpisodeCard)
             // Transfer focus to skip button if it's still visible
             if (skipButtonActuallyVisible) {
@@ -380,12 +339,11 @@ fun PlayerScreen(
                 if (cb != null) {
                     cb(null, null, null, PlayerExitReason.StillWatchingPrompt)
                 } else {
-                    val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed = true)
                     currentOnBackPress(
                         uiState.currentVideoId,
-                        focusSeason,
-                        focusEpisode,
-                        autoPlayEnabledForBack,
+                        uiState.currentSeason,
+                        uiState.currentEpisode,
+                        uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
                         true
                     )
                 }
@@ -393,19 +351,16 @@ fun PlayerScreen(
             }
             shouldDispatchNatural -> {
                 viewModel.stopAndRelease()
-                val next = uiState.nextEpisode?.takeIf {
-                    it.hasAired && !(it.released.isNullOrBlank() && it.available == false)
-                }
+                val next = uiState.nextEpisode?.takeIf { it.hasAired }
                 val cb = currentOnPlaybackEnded
                 if (cb != null) {
                     cb(next?.videoId, next?.season, next?.episode, null)
                 } else {
-                    val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed = true)
                     currentOnBackPress(
                         uiState.currentVideoId,
-                        focusSeason,
-                        focusEpisode,
-                        autoPlayEnabledForBack,
+                        uiState.currentSeason,
+                        uiState.currentEpisode,
+                        uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
                         true
                     )
                 }
@@ -549,33 +504,11 @@ fun PlayerScreen(
             restoreStreamInfoFocus = false
         }
     }
-    val moreDialogOpen by rememberUpdatedState(uiState.showMoreDialog)
-    val controlsVisibleForMoreBack by rememberUpdatedState(uiState.showControls)
-    val playerHasError by rememberUpdatedState(uiState.error != null)
-    LaunchedEffect(focusPlayAfterMoreBack) {
-        if (!focusPlayAfterMoreBack) return@LaunchedEffect
-        runCatching { playPauseFocusRequester.requestFocus() }
-        delay(200)
-        if (!moreDialogOpen && controlsVisibleForMoreBack && !playerHasError) {
-            playPauseFocusRequester.requestFocusAfterFrames(frames = 0)
-        }
-        focusPlayAfterMoreBack = false
-    }
-
-    val transparentLetterbox = uiState.transparentLetterbox &&
-        uiState.internalPlayerEngine != InternalPlayerEngine.MVP_PLAYER
-    DisposableEffect(transparentLetterbox) {
-        if (!transparentLetterbox) {
-            return@DisposableEffect onDispose {}
-        }
-        PlayerWindowBackdrop.acquireTransparent()
-        onDispose { PlayerWindowBackdrop.releaseTransparent() }
-    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .then(if (transparentLetterbox) Modifier else Modifier.background(Color.Black))
+            .background(Color.Black)
             .focusRequester(containerFocusRequester)
             .focusable(enabled = uiState.error == null)
             .onPreviewKeyEvent { keyEvent ->
@@ -919,8 +852,6 @@ fun PlayerScreen(
             label = "postPlayRecommendationPlayerBorderAlpha"
         )
         val playerSurfaceShape = RoundedCornerShape(postPlayRecommendationPlayerCornerRadius)
-        val playerSurfaceIsFullscreen = !postPlayRecommendationState.isVisible &&
-            postPlayRecommendationPlayerWidth >= 0.999f
         val playerSurfaceModifier = Modifier
             .align(Alignment.TopEnd)
             .padding(end = postPlayRecommendationPlayerPadding, top = postPlayRecommendationPlayerPadding)
@@ -931,10 +862,7 @@ fun PlayerScreen(
                 BorderStroke(1.dp, Color.White.copy(alpha = postPlayRecommendationPlayerBorderAlpha)),
                 playerSurfaceShape
             )
-            .then(
-                if (transparentLetterbox && playerSurfaceIsFullscreen) Modifier
-                else Modifier.background(Color.Black)
-            )
+            .background(Color.Black)
             .zIndex(
                 if (postPlayRecommendationState.isVisible || postPlayRecommendationPlayerWidth < 0.999f) {
                     2.2f
@@ -976,8 +904,6 @@ fun PlayerScreen(
                             isPlaying = uiState.isPlaying,
                             isBuffering = uiState.isBuffering,
                             aspectMode = uiState.aspectMode,
-                            tunnelingEnabled = uiState.tunnelingEnabled,
-                            tunneledSurfaceFill = uiState.tunneledSurfaceFill,
                             useLibass = uiState.useLibass,
                             libassRenderType = uiState.libassRenderType,
                             subtitleStyle = uiState.subtitleStyle,
@@ -1038,7 +964,6 @@ fun PlayerScreen(
                 onTrailerEnded = viewModel::onPostPlayTrailerEnded,
                 onPreviousRecommendation = viewModel::showPreviousPostPlayRecommendation,
                 onNextRecommendation = viewModel::showNextPostPlayRecommendation,
-                mdbListRatingOrder = postPlayRecommendationState.mdbListRatingOrder,
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(1f)
@@ -1089,7 +1014,7 @@ fun PlayerScreen(
             type = uiState.contentType,
             description = uiState.description,
             cast = uiState.castMembers,
-            showClock = !uiState.isLive,
+            showClock = !viewModel.playbackTimeline.collectAsState().value.isLive,
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(2.5f)
@@ -1186,11 +1111,9 @@ fun PlayerScreen(
                 uiState.activeSkipInterval
             },
             dismissed = uiState.skipIntervalDismissed,
-            targetsPostCredits = uiState.activeSkipTargetsPostCredits,
             controlsVisible = uiState.showControls,
             // Autoplay next-episode card owns focus; subtitle menu must keep D-pad focus (#2874).
-            suppressFocus = (uiState.postPlayMode is PostPlayMode.AutoPlay &&
-                postPlayRecommendationState.recommendation == null) || !skipIntroCanFocus,
+            suppressFocus = uiState.postPlayMode is PostPlayMode.AutoPlay || !skipIntroCanFocus,
             canFocus = skipIntroCanFocus,
             onSkip = { viewModel.onEvent(PlayerEvent.OnSkipIntro) },
             onDismiss = { viewModel.onEvent(PlayerEvent.OnDismissSkipIntro) },
@@ -1221,7 +1144,6 @@ fun PlayerScreen(
             mode = uiState.postPlayMode.takeIf {
                 uiState.error == null &&
                     !postPlayRecommendationState.isVisible &&
-                    postPlayRecommendationState.recommendation == null &&
                     !shouldConfirmNextEpisodeOnEnd &&
                     !uiState.showLoadingOverlay &&
                     !uiState.showPauseOverlay &&
@@ -1365,12 +1287,11 @@ fun PlayerScreen(
                             externalHandoffInProgress = false
                             if (launched && !exitDispatched) {
                                 exitDispatched = true
-                                val (focusSeason, focusEpisode) = uiState.returnFocusSeasonEpisode(completed)
                                 currentOnBackPress(
                                     uiState.currentVideoId,
-                                    focusSeason,
-                                    focusEpisode,
-                                    autoPlayEnabledForBack,
+                                    uiState.currentSeason,
+                                    uiState.currentEpisode,
+                                    uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
                                     completed
                                 )
                             }
@@ -1476,7 +1397,7 @@ fun PlayerScreen(
                 !uiState.showLoadingOverlay && !uiState.showPauseOverlay &&
                 !uiState.showSubtitleDelayOverlay && !uiState.showSubtitleTimingDialog &&
                 !uiState.showMoreDialog &&
-                !uiState.isLive,
+                !viewModel.playbackTimeline.collectAsState().value.isLive,
             enter = fadeIn(animationSpec = tween(150)),
             exit = fadeOut(animationSpec = tween(150)),
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -1566,7 +1487,6 @@ fun PlayerScreen(
                     onReload = { viewModel.onEvent(PlayerEvent.OnReloadSourceStreams) },
                     onAddonFilterSelected = { viewModel.onEvent(PlayerEvent.OnSourceAddonFilterSelected(it)) },
                     onStreamSelected = { viewModel.onEvent(PlayerEvent.OnSourceStreamSelected(it)) },
-                    onExpandStreams = { viewModel.controller.expandSourceFilteredStreamsIfNeeded() },
                     modifier = Modifier.align(Alignment.CenterEnd)
                 )
             }
@@ -1697,7 +1617,6 @@ fun PlayerScreen(
             SubtitleTimingDialogHost(
                 viewModel = viewModel,
                 modifier = Modifier.align(Alignment.TopCenter),
-                subtitleDelayMs = uiState.subtitleDelayMs,
                 selectedAddonSubtitle = uiState.selectedAddonSubtitle,
                 cues = uiState.subtitleAutoSyncCues,
                 capturedVideoMs = uiState.subtitleAutoSyncCapturedVideoMs,
@@ -1784,8 +1703,6 @@ private fun ExoPlayerSurface(
     isPlaying: Boolean,
     isBuffering: Boolean,
     aspectMode: AspectMode,
-    tunnelingEnabled: Boolean,
-    tunneledSurfaceFill: Boolean,
     useLibass: Boolean,
     libassRenderType: LibassRenderType,
     subtitleStyle: SubtitleStyleSettings,
@@ -1794,8 +1711,6 @@ private fun ExoPlayerSurface(
 ) {
     val context = LocalContext.current
     val latestAspectMode by rememberUpdatedState(aspectMode)
-    val latestTunnelingEnabled by rememberUpdatedState(tunnelingEnabled)
-    val latestTunneledSurfaceFill by rememberUpdatedState(tunneledSurfaceFill)
     val latestBindSubtitleView by rememberUpdatedState(onBindSubtitleView)
     val latestSubtitleStyle by rememberUpdatedState(subtitleStyle)
     val playerView = remember(context, player) {
@@ -1856,21 +1771,13 @@ private fun ExoPlayerSurface(
                     0f
                 }
                 playerView.post {
-                    playerView.syncExoSurfaceLayout(
-                        tunnelingEnabled = latestTunnelingEnabled,
-                        tunneledSurfaceFill = latestTunneledSurfaceFill,
-                        aspectMode = latestAspectMode
-                    )
+                    playerView.applyExoAspectMode(latestAspectMode)
                 }
             }
 
             override fun onRenderedFirstFrame() {
                 playerView.post {
-                    playerView.syncExoSurfaceLayout(
-                        tunnelingEnabled = latestTunnelingEnabled,
-                        tunneledSurfaceFill = latestTunneledSurfaceFill,
-                        aspectMode = latestAspectMode
-                    )
+                    playerView.applyExoAspectMode(latestAspectMode)
                 }
             }
 
@@ -1884,11 +1791,7 @@ private fun ExoPlayerSurface(
         }
         player.addListener(listener)
         playerView.post {
-            playerView.syncExoSurfaceLayout(
-                tunnelingEnabled = latestTunnelingEnabled,
-                tunneledSurfaceFill = latestTunneledSurfaceFill,
-                aspectMode = latestAspectMode
-            )
+            playerView.applyExoAspectMode(latestAspectMode)
         }
         onDispose {
             player.removeListener(listener)
@@ -1898,11 +1801,7 @@ private fun ExoPlayerSurface(
     DisposableEffect(playerView) {
         val listener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             playerView.post {
-                playerView.syncExoSurfaceLayout(
-                    tunnelingEnabled = latestTunnelingEnabled,
-                    tunneledSurfaceFill = latestTunneledSurfaceFill,
-                    aspectMode = latestAspectMode
-                )
+                playerView.applyExoAspectMode(latestAspectMode)
             }
         }
         val removeListener = addExoAspectLayoutChangeListener(playerView, listener)
@@ -1918,12 +1817,8 @@ private fun ExoPlayerSurface(
         }
     }
 
-    LaunchedEffect(playerView, aspectMode, tunnelingEnabled, tunneledSurfaceFill) {
-        playerView.syncExoSurfaceLayout(
-            tunnelingEnabled = tunnelingEnabled,
-            tunneledSurfaceFill = tunneledSurfaceFill,
-            aspectMode = aspectMode
-        )
+    LaunchedEffect(playerView, aspectMode) {
+        playerView.applyExoAspectMode(aspectMode)
     }
 
     LaunchedEffect(playerView, player, useLibass, libassRenderType) {
@@ -1950,21 +1845,6 @@ private fun PlayerView.enableComposeSurfaceSyncWorkaroundIfAvailable() {
 private fun PlayerView.applyExoAspectMode(mode: AspectMode) {
     setTag(R.id.player_view_aspect_mode_tag, mode)
     applyExoAspectMode(this, mode)
-}
-
-private fun PlayerView.syncExoSurfaceLayout(
-    tunnelingEnabled: Boolean,
-    tunneledSurfaceFill: Boolean,
-    aspectMode: AspectMode
-) {
-    val targetResizeMode = PlayerDisplayModeUtils.exoSurfaceResizeMode(
-        tunnelingEnabled = tunnelingEnabled,
-        tunneledSurfaceFill = tunneledSurfaceFill
-    )
-    if (resizeMode != targetResizeMode) {
-        resizeMode = targetResizeMode
-    }
-    applyExoAspectMode(aspectModeAppliedToExoSurface(tunnelingEnabled, aspectMode))
 }
 
 private data class SubtitleAppliedConfig(
@@ -2942,7 +2822,6 @@ private fun PlayerClockOverlayHost(viewModel: PlayerViewModel, playbackSpeed: Fl
 private fun SubtitleTimingDialogHost(
     viewModel: PlayerViewModel,
     modifier: Modifier = Modifier,
-    subtitleDelayMs: Int,
     selectedAddonSubtitle: Subtitle?,
     cues: List<SubtitleSyncCue>,
     capturedVideoMs: Long?,
@@ -2957,7 +2836,6 @@ private fun SubtitleTimingDialogHost(
     SubtitleTimingDialog(
         modifier = modifier,
         currentPositionMs = playbackTimeline.currentPosition,
-        subtitleDelayMs = subtitleDelayMs,
         selectedAddonSubtitle = selectedAddonSubtitle,
         cues = cues,
         capturedVideoMs = capturedVideoMs,
@@ -3421,7 +3299,7 @@ private fun ErrorOverlay(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (onSwitchMpvAction != null) {
-                    PlayerOverlayButton(
+                    ErrorOverlayButton(
                         text = stringResource(R.string.player_switch_to_mpv),
                         onClick = onSwitchMpvAction,
                         primary = true,
@@ -3435,7 +3313,7 @@ private fun ErrorOverlay(
                     )
                 }
                 if (showReportAction) {
-                    PlayerOverlayButton(
+                    ErrorOverlayButton(
                         text = when (reportStatus) {
                             PlaybackIssueReportStatus.Sending -> stringResource(R.string.player_report_issue_sending_button)
                             PlaybackIssueReportStatus.Sent -> stringResource(R.string.player_report_issue_sent_button)
@@ -3454,7 +3332,7 @@ private fun ErrorOverlay(
                             }
                     )
                 }
-                PlayerOverlayButton(
+                ErrorOverlayButton(
                     text = stringResource(R.string.player_go_back),
                     onClick = onBack,
                     primary = onSwitchMpvAction == null,
@@ -3480,7 +3358,7 @@ private fun ErrorOverlay(
 }
 
 @Composable
-internal fun PlayerOverlayButton(
+private fun ErrorOverlayButton(
     text: String,
     onClick: () -> Unit,
     primary: Boolean,

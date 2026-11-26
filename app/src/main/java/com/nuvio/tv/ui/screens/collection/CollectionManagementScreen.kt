@@ -66,11 +66,8 @@ import com.nuvio.tv.data.local.ValidationResult
 import com.nuvio.tv.domain.model.Collection
 import com.nuvio.tv.ui.components.LoadingIndicator
 import com.nuvio.tv.ui.components.NuvioDialog
-import com.nuvio.tv.ui.util.contentTextDirection
 import com.nuvio.tv.R
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.TextStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -183,8 +180,8 @@ fun CollectionManagementScreen(
         ) {
             Text(
                 text = stringResource(R.string.collections_header),
-                style = MaterialTheme.typography.headlineMedium.copy(textDirection = TextDirection.Content),
-                color = NuvioTheme.colors.TextPrimary,
+                style = MaterialTheme.typography.headlineMedium,
+                color = NuvioTheme.colors.TextPrimary
             )
             val newButtonFocusRequester = remember { FocusRequester() }
             LaunchedEffect(Unit) {
@@ -350,8 +347,8 @@ private fun ImportContent(
         ) {
             Text(
                 text = stringResource(R.string.collections_import_header),
-                style = MaterialTheme.typography.headlineMedium.copy(textDirection = TextDirection.Content),
-                color = NuvioTheme.colors.TextPrimary,
+                style = MaterialTheme.typography.headlineMedium,
+                color = NuvioTheme.colors.TextPrimary
             )
             Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                 NuvioButton(onClick = onBack) { Text(stringResource(R.string.collections_cancel)) }
@@ -441,8 +438,7 @@ private fun ImportContent(
                                     onValueChange = onTextChange,
                                     modifier = Modifier.fillMaxSize(),
                                     textStyle = MaterialTheme.typography.bodySmall.copy(
-                                        color = NuvioTheme.colors.TextPrimary,
-                                            textDirection = TextDirection.Content
+                                        color = NuvioTheme.colors.TextPrimary
                                     ),
                                     cursorBrush = SolidColor(NuvioTheme.colors.Primary),
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -498,8 +494,7 @@ private fun ImportContent(
                                     onValueChange = onUrlChange,
                                     modifier = Modifier.fillMaxWidth(),
                                     textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                        color = NuvioTheme.colors.TextPrimary,
-                                            textDirection = TextDirection.Content
+                                        color = NuvioTheme.colors.TextPrimary
                                     ),
                                     cursorBrush = SolidColor(NuvioTheme.colors.Primary),
                                     singleLine = true,
@@ -607,10 +602,8 @@ private fun CollectionListItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = collection.title,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        textDirection = collection.title.contentTextDirection()
-                    ),
-                    color = NuvioTheme.colors.TextPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = NuvioTheme.colors.TextPrimary
                 )
                 Text(
                     text = stringResource(R.string.collections_folder_count, collection.folders.size),

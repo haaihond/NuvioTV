@@ -19,8 +19,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private val Context.memberAccessDataStore: DataStore<Preferences> by preferencesDataStore(
-    name = "member_access",
-    corruptionHandler = androidx.datastore.core.handlers.ReplaceFileCorruptionHandler { androidx.datastore.preferences.core.emptyPreferences() }
+    name = "member_access"
 )
 
 @Singleton

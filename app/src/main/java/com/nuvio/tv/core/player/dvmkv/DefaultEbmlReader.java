@@ -172,9 +172,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private long maybeResyncToNextLevel1Element(ExtractorInput input) throws IOException {
     input.resetPeekPosition();
     while (true) {
-      if (!peekFullyOrEnd(input, scratch, MAX_ID_BYTES)) {
-        return C.RESULT_END_OF_INPUT;
-      }
+      input.peekFully(scratch, 0, MAX_ID_BYTES);
       int varintLength = VarintReader.parseUnsignedVarintLength(scratch[0]);
       if (varintLength != C.LENGTH_UNSET && varintLength <= MAX_ID_BYTES) {
         int potentialId = (int) VarintReader.assembleVarint(scratch, varintLength, false);
@@ -183,24 +181,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           return potentialId;
         }
       }
-      try {
-        input.skipFully(1);
-      } catch (EOFException e) {
-        return C.RESULT_END_OF_INPUT;
-      }
-    }
-  }
-
-  private static boolean peekFullyOrEnd(ExtractorInput input, byte[] target, int length)
-      throws IOException {
-    long streamLength = input.getLength();
-    if (streamLength != C.LENGTH_UNSET && streamLength - input.getPeekPosition() < length) {
-      return false;
-    }
-    try {
-      return input.peekFully(target, 0, length, /* allowEndOfInput= */ true);
-    } catch (EOFException e) {
-      return false;
+      input.skipFully(1);
     }
   }
 

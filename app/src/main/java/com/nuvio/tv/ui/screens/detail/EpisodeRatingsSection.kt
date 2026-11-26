@@ -2,10 +2,11 @@ package com.nuvio.tv.ui.screens.detail
 
 import com.nuvio.tv.ui.theme.NuvioTheme
 
-import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,7 +18,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,6 +29,8 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
@@ -108,11 +110,20 @@ fun EpisodeRatingsSection(
         }
     }
     val hasTitle = title.isNotBlank()
-    val currentUpFocusRequester by rememberUpdatedState(upFocusRequester)
-    val currentDownFocusRequester by rememberUpdatedState(downFocusRequester)
-    val selectedSeasonRequester = firstItemFocusRequester
-        ?: seasonFocusRequesters[selectedSeason]
-        ?: FocusRequester.Default
+    val upFocusModifier = if (upFocusRequester != null) {
+        Modifier.focusProperties {
+            up = upFocusRequester
+        }
+    } else {
+        Modifier
+    }
+    val downFocusModifier = if (downFocusRequester != null) {
+        Modifier.focusProperties {
+            down = downFocusRequester
+        }
+    } else {
+        Modifier
+    }
 
     Column(
         modifier = modifier
@@ -157,28 +168,25 @@ fun EpisodeRatingsSection(
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRestorer { selectedSeasonRequester }
-                        .focusGroup(),
+                        .focusRestorer {
+                            seasonFocusRequesters[selectedSeason] ?: FocusRequester.Default
+                        },
                     contentPadding = PaddingValues(horizontal = NuvioTheme.spacing.xxxl, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(seasonNumbers, key = { it }) { season ->
                         val isSelected = season == selectedSeason
-                        val focusRequester = if (isSelected) {
-                            selectedSeasonRequester
+                        val modifierWithRequester = if (firstItemFocusRequester != null && season == selectedSeason) {
+                            Modifier.focusRequester(firstItemFocusRequester)
                         } else {
-                            seasonFocusRequesters.getValue(season)
+                            Modifier.focusRequester(seasonFocusRequesters.getValue(season))
                         }
 
                         Card(
                             onClick = { selectedSeason = season },
-                            modifier = Modifier
-                                .focusRequester(focusRequester)
-                                .focusProperties {
-                                    val upRequester = currentUpFocusRequester
-                                    if (upRequester != null) up = upRequester
-                                    down = effectiveRatingsGridFocusRequester
-                                }
+                            modifier = modifierWithRequester
+                                .then(upFocusModifier)
+                                .focusProperties { down = effectiveRatingsGridFocusRequester }
                                 .onFocusChanged { state ->
                                     if (state.isFocused && selectedSeason != season) {
                                         selectedSeason = season
@@ -222,25 +230,27 @@ fun EpisodeRatingsSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(effectiveRatingsGridFocusRequester)
-                        .focusRestorer(firstEpisodeRatingFocusRequester)
-                        .focusGroup(),
+                        .focusRestorer(firstEpisodeRatingFocusRequester),
                     contentPadding = PaddingValues(horizontal = NuvioTheme.spacing.xxxl, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(seasonRatings, key = { "${it.seasonNumber}:${it.episodeNumber}" }) { episodeRating ->
+                        val selectedSeasonUpRequester = firstItemFocusRequester ?: seasonFocusRequesters[selectedSeason]
                         val isFirstEpisode = episodeRating == seasonRatings.firstOrNull()
 
                         Card(
                             onClick = { },
-                            modifier = Modifier
-                                .focusProperties {
-                                    up = selectedSeasonRequester
-                                    val downRequester = currentDownFocusRequester
-                                    if (downRequester != null) down = downRequester
-                                }
-                                .then(
+                            modifier = if (selectedSeasonUpRequester != null) {
+                                Modifier.focusProperties {
+                                    up = selectedSeasonUpRequester
+                                }.then(downFocusModifier).then(
                                     if (isFirstEpisode) Modifier.focusRequester(firstEpisodeRatingFocusRequester) else Modifier
-                                ),
+                                )
+                            } else {
+                                Modifier.then(downFocusModifier).then(
+                                    if (isFirstEpisode) Modifier.focusRequester(firstEpisodeRatingFocusRequester) else Modifier
+                                )
+                            },
                             shape = CardDefaults.shape(shape = RoundedCornerShape(14.dp)),
                             colors = CardDefaults.colors(
                                 containerColor = episodeRating.chipColor,

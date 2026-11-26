@@ -46,11 +46,22 @@ class PostPlayRecommendationStateTest {
     }
 
     @Test
-    fun `loading recommendation holds natural completion until player return`() {
-        val loading = PostPlayRecommendationUiState(isLoadingRecommendation = true)
+    fun `loaded recommendation holds natural completion until overlay evaluation`() {
+        val recommendation = PostPlayRecommendation(
+            id = "tmdb:1",
+            contentType = "movie",
+            title = "Example",
+            poster = null,
+            backdrop = null,
+            logo = null,
+            description = null,
+            releaseInfo = null,
+            rating = null,
+            genres = emptyList(),
+            runtime = null
+        )
 
-        assertTrue(loading.blocksNaturalCompletion)
-        assertFalse(loading.copy(hasReturnedToPlayer = true).blocksNaturalCompletion)
+        assertTrue(PostPlayRecommendationUiState(recommendation = recommendation).blocksNaturalCompletion)
     }
 
     @Test
@@ -74,7 +85,7 @@ class PostPlayRecommendationStateTest {
         assertFalse(state.copy(isVisible = false).canReturnToPlayer)
         assertFalse(returned.isVisible)
         assertTrue(returned.hasReturnedToPlayer)
-        assertFalse(returned.blocksNaturalCompletion)
+        assertTrue(returned.blocksNaturalCompletion)
     }
 
     @Test
@@ -152,7 +163,8 @@ class PostPlayRecommendationStateTest {
                 enabled = true,
                 useArtwork = true,
                 useBasicInfo = true,
-                useDetails = true
+                useDetails = true,
+                useReleaseDates = true
             ),
             tmdbId = "42"
         )

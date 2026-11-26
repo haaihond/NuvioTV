@@ -19,8 +19,6 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 internal object PlayerPlaybackNetworking {
-    private const val LOOPBACK_READ_TIMEOUT_SECONDS = 65L
-
     private val trustAllManager = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
 
@@ -93,14 +91,8 @@ internal object PlayerPlaybackNetworking {
             .build()
     }
 
-    fun createHttpClient(
-        defaultHeaders: Map<String, String> = emptyMap(),
-        useLongReadTimeout: Boolean = false
-    ): OkHttpClient {
+    fun createHttpClient(defaultHeaders: Map<String, String> = emptyMap()): OkHttpClient {
         val builder = playbackHttpClient.newBuilder()
-        if (useLongReadTimeout) {
-            builder.readTimeout(LOOPBACK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        }
         if (defaultHeaders.any { it.key.equals("Authorization", ignoreCase = true) }) {
             // OkHttp strips the Authorization header on cross-host redirects.
             // WebDAV servers behind reverse proxies commonly redirect to a
@@ -129,11 +121,8 @@ internal object PlayerPlaybackNetworking {
     }
 
     @UnstableApi
-    fun createHttpDataSourceFactory(
-        defaultHeaders: Map<String, String> = emptyMap(),
-        useLongReadTimeout: Boolean = false
-    ): DataSource.Factory {
-        val client = createHttpClient(defaultHeaders, useLongReadTimeout)
+    fun createHttpDataSourceFactory(defaultHeaders: Map<String, String> = emptyMap()): DataSource.Factory {
+        val client = createHttpClient(defaultHeaders)
         val httpFactory = OkHttpDataSource.Factory(client).apply {
             setDefaultRequestProperties(defaultHeaders)
             if (defaultHeaders.none { it.key.equals("User-Agent", ignoreCase = true) }) {

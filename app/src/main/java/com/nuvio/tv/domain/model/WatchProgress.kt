@@ -30,9 +30,7 @@ data class WatchProgress(
     val simklPlaybackId: Long? = null,
     override val trackingProviderId: String? = null,
     override val trackingProviderItemId: String? = null,
-    override val trackingSourceUrl: String? = null,
-    val completionThresholdOverride: Float? = null,
-    val excludedNextUpSeasons: Set<Int> = emptySet()
+    override val trackingSourceUrl: String? = null
 ) : TrackingAttributedItem {
     override val trackingContentId: String
         get() = contentId
@@ -43,8 +41,6 @@ data class WatchProgress(
         const val SOURCE_TRAKT_HISTORY = "trakt_history"
         const val SOURCE_TRAKT_SHOW_PROGRESS = "trakt_show_progress"
         const val SOURCE_SIMKL_PLAYBACK = "simkl_playback"
-        const val SOURCE_REMOTE_PLAYBACK = "remote_playback"
-        const val SOURCE_REMOTE_HISTORY = "remote_history"
         const val STARTED_THRESHOLD = 0.02f
         const val COMPLETED_THRESHOLD = 0.90f
         const val SIMKL_COMPLETED_THRESHOLD = 0.80f
@@ -73,8 +69,7 @@ data class WatchProgress(
         progressPercentage >= startThreshold && progressPercentage < endThreshold
 
     private fun completionThreshold(): Float =
-        completionThresholdOverride?.takeIf { it.isFinite() && it > 0f && it <= 1f }
-            ?: if (source == SOURCE_SIMKL_PLAYBACK) SIMKL_COMPLETED_THRESHOLD else COMPLETED_THRESHOLD
+        if (source == SOURCE_SIMKL_PLAYBACK) SIMKL_COMPLETED_THRESHOLD else COMPLETED_THRESHOLD
 
     /**
      * Returns the remaining time in milliseconds

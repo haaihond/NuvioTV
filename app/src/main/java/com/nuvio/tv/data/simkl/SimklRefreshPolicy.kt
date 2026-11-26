@@ -1,7 +1,8 @@
 package com.nuvio.tv.data.simkl
 
 import com.nuvio.tv.core.tracking.TrackingRefreshIntent
-import com.nuvio.tv.core.tracking.TrackingRefreshGate
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 const val SIMKL_AUTOMATIC_REFRESH_INTERVAL_MINUTES = 15
 const val SIMKL_AUTOMATIC_REFRESH_INTERVAL_MS =
@@ -20,4 +21,31 @@ fun shouldRunSimklRefresh(
     return elapsedMs < 0L || elapsedMs >= automaticIntervalMs
 }
 
-typealias SimklRefreshGate = TrackingRefreshGate
+class SimklRefreshGate {
+    private val mutex = Mutex()
+    @Volatile private var completionSequence = 0L
+    private var lastCompletedProfileGeneration: Long? = null
+
+    suspend fun runIfNeeded(
+        profileGeneration: Long,
+        shouldRun: () -> Boolean,
+        block: suspend () -> Unit
+    ) {
+        val observedSequence = completionSequence
+        mutex.withLock {
+            if (
+                completionSequence != observedSequence &&
+                lastCompletedProfileGeneration == profileGeneration
+            ) {
+                return
+            }
+            if (!shouldRun()) return
+            try {
+                block()
+            } finally {
+                lastCompletedProfileGeneration = profileGeneration
+                completionSequence += 1L
+            }
+        }
+    }
+}

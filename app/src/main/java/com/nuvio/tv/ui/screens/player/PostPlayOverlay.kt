@@ -42,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.FocusRequester.Companion.Cancel
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -51,11 +50,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nuvio.tv.ui.util.localizeEpisodeTitle
@@ -296,7 +293,6 @@ private fun StillWatchingBody(
                 )
             }
         }
-        val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         Row(
             modifier = Modifier.padding(start = NuvioTheme.spacing.sm),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -316,10 +312,7 @@ private fun StillWatchingBody(
                             runCatching { continueFocusRequester.requestFocus() }
                         }
                     }
-                    .focusProperties {
-                        if (isRtl) left = exitFocusRequester else right = exitFocusRequester
-                        if (isRtl) right = Cancel else left = Cancel
-                    },
+                    .focusProperties { right = exitFocusRequester },
             )
             PostPlayPillButton(
                 icon = Icons.Default.Close,
@@ -328,10 +321,7 @@ private fun StillWatchingBody(
                 textColor = Color.White.copy(alpha = 0.72f),
                 onClick = onDismiss,
                 focusRequester = exitFocusRequester,
-                modifier = Modifier.focusProperties {
-                    if (isRtl) right = continueFocusRequester else left = continueFocusRequester
-                    if (isRtl) left = Cancel else right = Cancel
-                },
+                modifier = Modifier.focusProperties { left = continueFocusRequester },
             )
         }
     }

@@ -22,8 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.TextStyle
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -62,8 +60,8 @@ fun TraktSourcePickerContent(
                 text = stringResource(
                     if (isEditing) R.string.collections_editor_edit_trakt_source else R.string.collections_editor_trakt_sources
                 ),
-                style = MaterialTheme.typography.headlineMedium.copy(textDirection = TextDirection.Content),
-                color = NuvioTheme.colors.TextPrimary,
+                style = MaterialTheme.typography.headlineMedium,
+                color = NuvioTheme.colors.TextPrimary
             )
             NuvioButton(onClick = onBack) { Text(stringResource(R.string.collections_editor_back)) }
         }
