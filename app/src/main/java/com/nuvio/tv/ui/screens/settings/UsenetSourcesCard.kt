@@ -342,15 +342,32 @@ private fun IndexerEditor(item: UsenetIndexer, isNew: Boolean, test: suspend (Us
     var name by remember { mutableStateOf(item.name) }
     var url by remember { mutableStateOf(item.apiUrl) }
     var key by remember { mutableStateOf(item.apiKey) }
+    var searchMode by remember { mutableStateOf(item.searchMode) }
+    var choosingMode by remember { mutableStateOf(false) }
+    val modes = listOf(
+        SettingsPickerOption(UsenetSearchMode.AUTO, stringResource(R.string.usenet_search_auto)),
+        SettingsPickerOption(UsenetSearchMode.FORCED_QUERY, stringResource(R.string.usenet_search_forced_query)),
+        SettingsPickerOption(UsenetSearchMode.BOTH, stringResource(R.string.usenet_search_both))
+    )
     var error by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<Boolean?>(null) }
     val scope = rememberCoroutineScope()
-    fun value() = item.copy(name = name.trim(), apiUrl = url.trim(), apiKey = key.trim())
+    fun value() = item.copy(name = name.trim(), apiUrl = url.trim(), apiKey = key.trim(), searchMode = searchMode)
+    if (choosingMode) {
+        SettingsSingleChoiceDialog(title = stringResource(R.string.usenet_search_mode),
+            subtitle = stringResource(R.string.usenet_search_mode_hint), options = modes, selectedValue = searchMode,
+            onOptionSelected = { searchMode = it; choosingMode = false }, onDismiss = { choosingMode = false })
+        return
+    }
     NuvioDialog(title = stringResource(if (isNew) R.string.usenet_add_indexer else R.string.usenet_edit_indexer), subtitle = stringResource(R.string.usenet_indexer_hint), onDismiss = onDismiss) {
-        SourceField(stringResource(R.string.usenet_source_name), name, { name = it; testResult = null })
-        SourceField(stringResource(R.string.usenet_indexer_url), url, { url = it; testResult = null })
-        SourceField(stringResource(R.string.usenet_indexer_key), key, { key = it; testResult = null }, secret = true)
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SourceField(stringResource(R.string.usenet_source_name), name, { name = it; testResult = null })
+            SourceField(stringResource(R.string.usenet_indexer_url), url, { url = it; testResult = null })
+            SourceField(stringResource(R.string.usenet_indexer_key), key, { key = it; testResult = null }, secret = true)
+            SettingsActionRow(title = stringResource(R.string.usenet_search_mode), subtitle = null,
+                value = modes.first { it.value == searchMode }.title, onClick = { choosingMode = true })
+        }
         if (error) Text(stringResource(R.string.usenet_indexer_invalid), color = NuvioTheme.colors.TextSecondary)
         if (testing || testResult != null) Text(stringResource(when {
             testing -> R.string.usenet_test_running

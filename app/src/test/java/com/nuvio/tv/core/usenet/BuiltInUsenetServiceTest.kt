@@ -146,6 +146,67 @@ class BuiltInUsenetServiceTest {
         coVerify(exactly = 2) { client.search(indexer, match { it.imdbId == null }, any()) }
     }
 
+    @Test fun `search modes select the supported requests and merge repeats before the limit`() = runTest {
+        val client = mockk<NewznabClient>()
+        val tmdb = mockk<TmdbService>()
+        val api = mockk<TmdbApi>()
+        coEvery { tmdb.ensureTmdbId("tt1", "movie") } returns "10"
+        coEvery { api.getMovieDetails(10, any(), any()) } returns Response.success(TmdbDetailsResponse(id = 10, title = "Movie"))
+        val service = BuiltInUsenetService(client, tmdb, api)
+        val indexer = UsenetIndexer(name = "Index", apiUrl = "https://index.test/api")
+        val idHit = release(indexer, "Movie.2020.2160p")
+        val textHit = release(indexer, "Movie.2020.1080p")
+        val requested = mutableListOf<UsenetSearchRequest>()
+        var caps = NewznabCapabilities(movieParams = setOf("imdbid", "q"))
+        coEvery { client.capabilities(any()) } answers { caps }
+        coEvery { client.search(any(), capture(requested), any()) } answers {
+            val search = secondArg<UsenetSearchRequest>()
+            if (search.imdbId != null) listOf(idHit)
+            else {
+                assertNull(search.tmdbId)
+                assertNull(search.tvdbId)
+                assertEquals("Movie", search.title)
+                listOf(release(indexer, "Movie 2020 2160p"), textHit)
+            }
+        }
+        suspend fun search(mode: UsenetSearchMode): List<String?> {
+            requested.clear()
+            val config = UsenetSourceConfiguration(enabled = true, providers = listOf(provider),
+                indexers = listOf(indexer.copy(searchMode = mode)), maxResults = 2)
+            val group = service.search(config, "movie", "tt1", null, null).toList().mapNotNull { it.group }.single()
+            return group.streams.map { it.title }
+        }
+        assertEquals(listOf(idHit.title), search(UsenetSearchMode.AUTO))
+        assertEquals(listOf("tt1"), requested.map { it.imdbId })
+        assertEquals(listOf("Movie 2020 2160p", textHit.title), search(UsenetSearchMode.FORCED_QUERY))
+        assertEquals(listOf("Movie"), requested.map { it.title })
+        assertEquals(listOf(idHit.title, textHit.title), search(UsenetSearchMode.BOTH))
+        assertEquals(listOf("tt1", null), requested.map { it.imdbId })
+
+        caps = NewznabCapabilities(movieParams = setOf("q"))
+        assertEquals(listOf("Movie 2020 2160p", textHit.title), search(UsenetSearchMode.BOTH))
+        assertEquals(listOf("Movie"), requested.map { it.title })
+    }
+
+    @Test fun `both keeps matches when the other search fails`() = runTest {
+        val indexer = UsenetIndexer(name = "Index", apiUrl = "https://index.test/api", searchMode = UsenetSearchMode.BOTH)
+        val config = UsenetSourceConfiguration(enabled = true, providers = listOf(provider), indexers = listOf(indexer))
+        val client = mockk<NewznabClient>()
+        val tmdb = mockk<TmdbService>()
+        val api = mockk<TmdbApi>()
+        coEvery { client.capabilities(indexer) } returns NewznabCapabilities()
+        coEvery { tmdb.ensureTmdbId("tt1", "movie") } returns "10"
+        coEvery { api.getMovieDetails(10, any(), any()) } returns Response.success(TmdbDetailsResponse(id = 10, title = "Movie"))
+        val service = BuiltInUsenetService(client, tmdb, api)
+        suspend fun result() = service.search(config, "movie", "tt1", null, null).toList().single().group!!.streams.single().title
+        coEvery { client.search(indexer, match { it.imdbId != null }, any()) } returns listOf(release(indexer, "ID match"))
+        coEvery { client.search(indexer, match { it.imdbId == null }, any()) } throws IndexerCooldownException(100)
+        assertEquals("ID match", result())
+        coEvery { client.search(indexer, match { it.imdbId != null }, any()) } throws IllegalStateException("ID search unavailable")
+        coEvery { client.search(indexer, match { it.imdbId == null }, any()) } returns listOf(release(indexer, "Title match"))
+        assertEquals("Title match", result())
+    }
+
     @Test fun `the original title is searched when the id and the title find nothing`() = runTest {
         val indexer = UsenetIndexer(id = "a", name = "A", apiUrl = "https://a.test/api")
         val config = UsenetSourceConfiguration(enabled = true, providers = listOf(provider), indexers = listOf(indexer))

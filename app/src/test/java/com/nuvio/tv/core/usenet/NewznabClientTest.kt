@@ -1,5 +1,12 @@
 package com.nuvio.tv.core.usenet
 
+import com.nuvio.tv.core.tmdb.TmdbService
+import com.nuvio.tv.data.remote.api.TmdbApi
+import com.nuvio.tv.data.remote.api.TmdbDetailsResponse
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -18,6 +25,29 @@ class NewznabClientTest {
         """<rss xmlns:n="urn:newznab"><channel><n:response total="$total"/><item><title>$title</title><enclosure type="application/x-nzb" url="${url("/get?id=$id")}" length="100"/></item></channel></rss>"""
     private fun MockWebServer.indexer(key: String = "secret") =
         UsenetIndexer(name = "Test", apiUrl = url("/1/api?custom=1").toString(), apiKey = key)
+
+    @Test fun `forced query sends only the episode title request even with full TV ID support`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""<caps><searching><tv-search available="yes" supportedParams="imdbid,tvdbid,tmdbid,season,ep,q"/></searching></caps>"""))
+            server.enqueue(MockResponse().setBody(server.page("The.Show.S02E03.1080p", 1)))
+            val tmdb = mockk<TmdbService>()
+            val api = mockk<TmdbApi>()
+            coEvery { api.getTvDetails(10, any(), any()) } returns retrofit2.Response.success(TmdbDetailsResponse(id = 10, name = "The Show"))
+            val config = UsenetSourceConfiguration(enabled = true, providers = listOf(UsenetProvider()),
+                indexers = listOf(server.indexer().copy(searchMode = UsenetSearchMode.FORCED_QUERY)))
+            val service = BuiltInUsenetService(NewznabClient(MemoryStorage()), tmdb, api)
+            val group = service.search(config, "series", "tmdb:10:2:3", null, null).toList().single().group!!
+            assertEquals("The.Show.S02E03.1080p", group.streams.single().title)
+            assertEquals(2, server.requestCount)
+            server.takeRequest() // caps
+            val query = server.takeRequest().requestUrl!!
+            assertEquals("The Show S02E03", query.queryParameter("q"))
+            assertEquals("3", query.queryParameter("ep"))
+            assertFalse(NewznabProtocol.isIdSearch(query))
+            coVerify(exactly = 0) { tmdb.tmdbToImdb(any(), any()) }
+            coVerify(exactly = 0) { api.getTvExternalIds(any(), any()) }
+        }
+    }
 
     @Test fun `caps are cached and bounded pagination retains complete endpoint parameters`() = runBlocking {
         MockWebServer().use { server ->

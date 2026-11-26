@@ -51,7 +51,8 @@ data class UsenetIndexer(
     val apiKey: String = "",
     val enabled: Boolean = true,
     /** Equal priorities are searched together; lower priorities only when higher ones find nothing. */
-    val priority: Int = 1
+    val priority: Int = 1,
+    val searchMode: UsenetSearchMode = UsenetSearchMode.AUTO
 ) {
     fun validate() {
         val url = apiUrl.toHttpUrlOrNull()
@@ -64,6 +65,9 @@ data class UsenetIndexer(
 
     override fun toString() = "UsenetIndexer(id=$id, enabled=$enabled)"
 }
+
+@Serializable
+enum class UsenetSearchMode { AUTO, FORCED_QUERY, BOTH }
 
 @Serializable
 enum class UsenetSort { QUALITY, LARGEST, SMALLEST, NEWEST, INDEXER }

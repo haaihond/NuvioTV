@@ -3,6 +3,7 @@ package com.nuvio.tv.core.server
 import com.nuvio.tv.core.usenet.ProviderTestResult
 import com.nuvio.tv.core.usenet.UsenetIndexer
 import com.nuvio.tv.core.usenet.UsenetProvider
+import com.nuvio.tv.core.usenet.UsenetSearchMode
 import com.nuvio.tv.core.usenet.UsenetSourceConfiguration
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -75,11 +76,13 @@ class UsenetSourcesConfigServerTest {
         val edited = setup.configuration.providers.single()
         assertEquals(provider.copy(name = "Renamed", host = "eu.example.com", port = 443, connections = 30, priority = 2), edited)
 
-        assertEquals(200, call("/api/indexers", """{"id":"i1","name":"Indexer","apiUrl":"https://indexer.example/api","apiKey":" ","priority":3}""").first)
-        assertEquals(indexer.copy(priority = 3), setup.configuration.indexers.single())
+        assertEquals(200, call("/api/indexers", """{"id":"i1","name":"Indexer","apiUrl":"https://indexer.example/api","apiKey":" ","priority":3,"searchMode":"BOTH"}""").first)
+        assertEquals(indexer.copy(priority = 3, searchMode = UsenetSearchMode.BOTH), setup.configuration.indexers.single())
+        assertTrue(call("/api/sources").second.contains(""""searchMode":"BOTH""""))
 
         call("/api/indexers", """{"id":"i1","name":"Indexer","apiUrl":"https://indexer.example/api","apiKey":"new-key"}""")
         assertEquals("new-key", setup.configuration.indexers.single().apiKey)
+        assertEquals(UsenetSearchMode.BOTH, setup.configuration.indexers.single().searchMode)
         assertEquals(listOf("Renamed", "Indexer", "Indexer"), setup.saved)
     }
 

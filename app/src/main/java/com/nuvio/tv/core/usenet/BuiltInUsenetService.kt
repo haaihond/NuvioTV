@@ -16,6 +16,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -263,11 +264,21 @@ class BuiltInUsenetService @Inject constructor(
             episode = resolvedEpisode, series = series)
         if (series && (resolvedSeason == null || resolvedSeason < 0 || resolvedEpisode == null || resolvedEpisode < 1)) return@flow
         coroutineScope {
-            // A failed child would cancel this scope; keep lookup failures per indexer.
-            val metadata = async(start = CoroutineStart.LAZY) {
-                try { metadata(request, videoId, type) }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
+            // Share metadata between indexers. Forced Query only needs title details.
+            val tmdbId = async(start = CoroutineStart.LAZY) {
+                request.tmdbId ?: optionalLookup { tmdb.ensureTmdbId(videoId, type) }
+            }
+            val ids = async(start = CoroutineStart.LAZY) {
+                val id = tmdbId.await()
+                val number = id?.toIntOrNull()
+                val imdb = request.imdbId ?: number?.let { optionalLookup { tmdb.tmdbToImdb(it, type) } }
+                val tvdb = if (series && number != null) optionalLookup {
+                    tmdbApi.getTvExternalIds(number, BuildConfig.TMDB_API_KEY).body()?.tvdbId?.toString()
+                } else null
+                request.copy(imdbId = imdb, tmdbId = id, tvdbId = tvdb)
+            }
+            val title = async(start = CoroutineStart.LAZY) {
+                tmdbId.await()?.toIntOrNull()?.let { optionalLookup { titleRequest(request, it) } }
             }
             val releases = mutableListOf<UsenetRelease>()
             fun arranged() = NewznabProtocol.arrange(
@@ -281,11 +292,7 @@ class BuiltInUsenetService @Inject constructor(
                 val jobs = tier.map { indexer ->
                     launch {
                         val result = try {
-                            val caps = client.capabilities(indexer)
-                            val canSearchId = NewznabProtocol.searchUrl(indexer, request, caps) != null
-                            val search = if (canSearchId) request else metadata.await() ?: error("Metadata unavailable")
-                            val found = client.search(indexer, search, caps)
-                            Result.success(if (found.isEmpty()) askAgain(indexer, search, caps) { metadata.await() } ?: found else found)
+                            Result.success(searchIndexer(indexer, request, ids, title))
                         } catch (e: CancellationException) { throw e }
                         catch (e: Exception) { Result.failure(e) }
                         results.send(indexer to result)
@@ -301,7 +308,11 @@ class BuiltInUsenetService @Inject constructor(
                                 DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(cooldown.until)) + "."
                         } else "${indexer.name}: indexer search failed. Check the API URL, key and limits."))
                     } else {
-                        releases += result.getOrThrow()
+                        val found = result.getOrThrow()
+                        // Both can return the same release under different download URLs.
+                        // When cross-indexer deduplication is enabled, arranged() handles both scopes.
+                        releases += if (indexer.searchMode == UsenetSearchMode.BOTH && !config.hideDuplicates)
+                            NewznabProtocol.withoutDuplicates(found, config) else found
                         val arranged = arranged()
                         if (arranged.isNotEmpty()) emit(BuiltInUsenetResult(group = AddonStreams(GROUP_NAME, null,
                             arranged.map { it.toStream(config) })))
@@ -309,56 +320,72 @@ class BuiltInUsenetService @Inject constructor(
                 }
                 if (arranged().isNotEmpty()) break
             }
-            metadata.cancel()
+            ids.cancel()
+            title.cancel()
+            tmdbId.cancel()
         }
     }
 
-    /**
-     * Asks again when a search found nothing: by title after an ID search (some indexers have thin
-     * ID coverage), then by the original title, under which foreign releases are often posted.
-     * Each attempt is made only when the ones before it found nothing. Null when none found anything.
-     */
-    private suspend fun askAgain(indexer: UsenetIndexer, searched: UsenetSearchRequest, caps: NewznabCapabilities,
-        metadata: suspend () -> UsenetSearchRequest?): List<UsenetRelease>? {
-        val url = NewznabProtocol.searchUrl(indexer, searched, caps) ?: return null
-        val byTitle = (metadata() ?: return null).copy(imdbId = null, tmdbId = null, tvdbId = null)
-        val attempts = listOfNotNull(
-            byTitle.takeIf { NewznabProtocol.isIdSearch(url) },
-            // Indexers search Latin text; an original title in another script would find nothing.
-            byTitle.originalTitle?.takeIf { LATIN.containsMatchIn(it) }
-                ?.let { byTitle.copy(title = it, originalTitle = byTitle.title) }
-        )
-        for (attempt in attempts) {
-            if (NewznabProtocol.searchUrl(indexer, attempt, caps) == null) continue
-            val found = try { client.search(indexer, attempt, caps) }
-            catch (e: CancellationException) { throw e }
-            catch (e: IndexerCooldownException) { throw e }
-            // The first search succeeded; a failed later attempt only means nothing more was found.
-            catch (_: Exception) { continue }
-            if (found.isNotEmpty()) return found
+    private suspend fun searchIndexer(indexer: UsenetIndexer, request: UsenetSearchRequest,
+        ids: Deferred<UsenetSearchRequest>, title: Deferred<UsenetSearchRequest?>): List<UsenetRelease> {
+        val caps = client.capabilities(indexer)
+        val mode = indexer.searchMode
+        val idRequest = when {
+            mode == UsenetSearchMode.FORCED_QUERY -> null
+            NewznabProtocol.searchUrl(indexer, request, caps) != null -> request
+            else -> ids.await().takeIf { NewznabProtocol.searchUrl(indexer, it, caps) != null }
         }
-        return null
+        if (idRequest == null) {
+            return searchByTitle(indexer, title.await() ?: error("Metadata unavailable"), caps)
+        }
+
+        val byId = try {
+            client.search(indexer, idRequest, caps)
+        } catch (e: CancellationException) { throw e }
+        catch (e: IndexerCooldownException) { throw e }
+        catch (e: NewznabAuthException) { throw e }
+        catch (e: Exception) {
+            if (mode != UsenetSearchMode.BOTH) throw e
+            return searchByTitle(indexer, title.await() ?: throw e, caps).ifEmpty { throw e }
+        }
+        if (mode == UsenetSearchMode.AUTO && byId.isNotEmpty()) return byId
+        val details = title.await() ?: return byId
+        val byTitle = try {
+            searchByTitle(indexer, details, caps)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (byId.isEmpty() && (mode == UsenetSearchMode.BOTH || e is IndexerCooldownException)) throw e
+            return byId
+        }
+        return byId + byTitle
     }
 
-    private suspend fun metadata(request: UsenetSearchRequest, videoId: String, type: String): UsenetSearchRequest {
-        val id = request.tmdbId ?: tmdb.ensureTmdbId(videoId, type)
-        val imdb = request.imdbId ?: id?.toIntOrNull()?.let { tmdb.tmdbToImdb(it, type) }
-        val details = try {
-            id?.toIntOrNull()?.let {
-                if (request.series) tmdbApi.getTvDetails(it, BuildConfig.TMDB_API_KEY).body()
-                else tmdbApi.getMovieDetails(it, BuildConfig.TMDB_API_KEY).body()
-            }
-        } catch (e: CancellationException) { throw e }
+    private suspend fun searchByTitle(indexer: UsenetIndexer, request: UsenetSearchRequest,
+        caps: NewznabCapabilities): List<UsenetRelease> {
+        val url = NewznabProtocol.searchUrl(indexer, request, caps) ?: return emptyList()
+        val releases = client.search(indexer, request, caps)
+        if (releases.isNotEmpty()) return releases
+        val original = request.originalTitle?.takeIf { LATIN.containsMatchIn(it) } ?: return emptyList()
+        val alternate = request.copy(title = original, originalTitle = request.title)
+        if (NewznabProtocol.searchUrl(indexer, alternate, caps) == url) return emptyList()
+        return try { client.search(indexer, alternate, caps) }
+        catch (e: CancellationException) { throw e }
+        catch (e: IndexerCooldownException) { throw e }
+        catch (_: Exception) { emptyList() }
+    }
+
+    private suspend fun <T> optionalLookup(lookup: suspend () -> T): T? =
+        try { lookup() } catch (e: CancellationException) { throw e }
         catch (_: Exception) { null }
-        val tvdb = if (!request.series) null else try {
-            id?.toIntOrNull()?.let { tmdbApi.getTvExternalIds(it, BuildConfig.TMDB_API_KEY).body()?.tvdbId?.toString() }
-        } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { null }
-        val title = details?.title ?: details?.name
-        val original = (details?.originalTitle ?: details?.originalName)
+
+    private suspend fun titleRequest(request: UsenetSearchRequest, id: Int): UsenetSearchRequest? {
+        val details = (if (request.series) tmdbApi.getTvDetails(id, BuildConfig.TMDB_API_KEY)
+            else tmdbApi.getMovieDetails(id, BuildConfig.TMDB_API_KEY)).body() ?: return null
+        val title = details.title ?: details.name
+        val original = (details.originalTitle ?: details.originalName)
             ?.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
-        return request.copy(imdbId = imdb, tmdbId = id, tvdbId = tvdb, title = title, originalTitle = original,
-            year = (details?.releaseDate ?: details?.firstAirDate)?.take(4)?.toIntOrNull())
+        return request.copy(imdbId = null, tmdbId = null, tvdbId = null, title = title, originalTitle = original,
+            year = (details.releaseDate ?: details.firstAirDate)?.take(4)?.toIntOrNull())
     }
 
     private fun UsenetRelease.toStream(config: UsenetSourceConfiguration): Stream {

@@ -78,11 +78,18 @@ disabled, deleted, reprioritized or reordered. Credentials are stored as AES-GCM
 ciphertext protected by Android Keystore, separately for each profile. They
 are device-local and are not included in account/profile synchronization.
 
-Searches use advertised movie/TV capabilities, preferring IMDb, then TVDB (TV
+Each indexer has a **Search mode** in the TV editor and phone setup.
+**Automatic** (the default) uses an ID when possible and tries the title if
+the ID returns no matches. **Forced Query** always searches by title.
+**Both** combines ID and title matches in the same Built-in Usenet group,
+even when the ID search succeeds. If the indexer has no supported ID, Both
+uses the same title search as Forced Query. Repeated releases from that indexer
+are shown once, before the result limit. **Hide repeated releases** also merges
+copies across indexers.
+
+ID searches use advertised movie/TV capabilities, preferring IMDb, then TVDB (TV
 only, looked up through TMDB) and TMDB IDs.
-Title searches are used when the indexer does not support an available ID, and
-when an ID search finds nothing (some indexers have thin ID coverage); this
-costs one more API hit only in that case. They require TMDB metadata. Titles
+Title searches require TMDB metadata. Titles
 are queried and compared the way release names spell them: without accents
 (umlauts match both `Koenig` and `Konig`), without apostrophes, and with `&`
 equal to `and`. A movie's release year may differ from TMDB's by one year,

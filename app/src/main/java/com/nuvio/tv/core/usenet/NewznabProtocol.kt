@@ -273,6 +273,7 @@ object NewznabProtocol {
         fun name(release: UsenetRelease) =
             release.title.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
         return releases.groupBy(::name).values.map { copies ->
+            if (copies.size == 1) return@map copies.first()
             // A preferred copy hidden by a filter (no size, passworded) must not hide the others.
             copies.filter { arrange(listOf(it), config, now).isNotEmpty() }.ifEmpty { copies }
                 .minBy { order[it.indexerId] ?: Int.MAX_VALUE }

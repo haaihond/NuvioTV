@@ -131,6 +131,13 @@ object UsenetSourcesWebPage {
       <label for="iPriority">${s(R.string.usenet_priority)}</label>
       <select id="iPriority">$priorities</select>
       <div class="hint">${s(R.string.usenet_indexer_priority_hint)}</div>
+      <label for="iSearchMode">${s(R.string.usenet_search_mode)}</label>
+      <select id="iSearchMode">
+        <option value="AUTO">${s(R.string.usenet_search_auto)}</option>
+        <option value="FORCED_QUERY">${s(R.string.usenet_search_forced_query)}</option>
+        <option value="BOTH">${s(R.string.usenet_search_both)}</option>
+      </select>
+      <div class="hint">${s(R.string.usenet_search_mode_hint)}</div>
       <div class="actions">
         <button class="btn" type="button" data-cancel>${s(R.string.action_cancel)}</button>
         <button class="btn" type="button" id="testIndexer">${s(R.string.usenet_test_indexer)}</button>
@@ -217,6 +224,7 @@ function openIndexer(x) {
   $('iUrl').value = x ? x.apiUrl : '';
   secretHint($('iKey'), x && x.hasKey);
   $('iPriority').value = x ? x.priority : 1;
+  $('iSearchMode').value = x?.searchMode || 'AUTO';
   $('indexerForm').classList.add('open');
   setStatus('');
   $('iName').focus();
@@ -228,7 +236,7 @@ function providerValue() {
 }
 function indexerValue() {
   return { id: editing.indexer, name: $('iName').value, apiUrl: $('iUrl').value, apiKey: $('iKey').value,
-    priority: parseInt($('iPriority').value, 10) };
+    priority: parseInt($('iPriority').value, 10), searchMode: $('iSearchMode').value };
 }
 async function run(button, pending, action) {
   button.disabled = true;

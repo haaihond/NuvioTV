@@ -4,6 +4,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.core.usenet.ProviderTestResult
 import com.nuvio.tv.core.usenet.UsenetIndexer
 import com.nuvio.tv.core.usenet.UsenetProvider
+import com.nuvio.tv.core.usenet.UsenetSearchMode
 import com.nuvio.tv.core.usenet.UsenetSourceConfiguration
 import com.nuvio.tv.core.usenet.messageRes
 import fi.iki.elonen.NanoHTTPD
@@ -203,16 +204,18 @@ internal data class PhoneIndexer(
     val apiKey: String = "",
     val hasKey: Boolean = false,
     val priority: Int = 1,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val searchMode: UsenetSearchMode? = null
 ) {
     fun merge(existing: UsenetIndexer?) = (existing ?: UsenetIndexer()).copy(
         name = name.trim(), apiUrl = apiUrl.trim(), apiKey = apiKey.trim().ifEmpty { existing?.apiKey.orEmpty() },
-        priority = priority
+        priority = priority, searchMode = searchMode ?: existing?.searchMode ?: UsenetSearchMode.AUTO
     )
 
     companion object {
         fun of(indexer: UsenetIndexer) = PhoneIndexer(indexer.id, indexer.name, indexer.apiUrl,
-            hasKey = indexer.apiKey.isNotEmpty(), priority = indexer.priority, enabled = indexer.enabled)
+            hasKey = indexer.apiKey.isNotEmpty(), priority = indexer.priority, enabled = indexer.enabled,
+            searchMode = indexer.searchMode)
     }
 }
 
