@@ -268,20 +268,21 @@ object NewznabProtocol {
         'ł' to "l", 'þ' to "th", 'ı' to "i")
 
     /**
-     * Keeps one copy of a release found by several indexers: the one from the highest
-     * indexer priority (then list order) that passes the filters. Names are compared
+     * Keeps one copy that passes the filters, preferring language matches, then
+     * indexer priority and list order. Names are compared
      * ignoring case and punctuation, since indexers write separators differently.
      */
     fun withoutDuplicates(releases: List<UsenetRelease>, config: UsenetSourceConfiguration,
         now: Long = System.currentTimeMillis()): List<UsenetRelease> {
         val order = config.indexers.mapIndexed { i, indexer -> indexer.id to i }.toMap()
+        val copyOrder = preferLanguages(config, compareBy { order[it.indexerId] ?: Int.MAX_VALUE })
         fun name(release: UsenetRelease) =
             release.title.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
         return releases.groupBy(::name).values.map { copies ->
             if (copies.size == 1) return@map copies.first()
             // A preferred copy hidden by a filter (no size, passworded) must not hide the others.
             copies.filter { arrange(listOf(it), config, now).isNotEmpty() }.ifEmpty { copies }
-                .minBy { order[it.indexerId] ?: Int.MAX_VALUE }
+                .minWith(copyOrder)
         }
     }
 
@@ -301,9 +302,22 @@ object NewznabProtocol {
             UsenetSort.NEWEST -> compareByDescending<UsenetRelease> { it.publishedAt }
             UsenetSort.INDEXER -> compareBy<UsenetRelease> { priority[it.indexerId] ?: Int.MAX_VALUE }
         }
-        return filtered.sortedWith(primary.thenBy { priority[it.indexerId] ?: Int.MAX_VALUE }
+        return filtered.sortedWith(preferLanguages(config, primary).thenBy { priority[it.indexerId] ?: Int.MAX_VALUE }
             .thenByDescending { it.resolution }.thenByDescending { it.size }.thenBy { it.title }.thenBy { it.nzbUrl })
             .distinctBy { it.nzbUrl }.take(config.maxResults)
+    }
+
+    /** Audio is the first preference, subtitles the second. The chosen sort breaks ties. */
+    private fun preferLanguages(config: UsenetSourceConfiguration, sort: Comparator<UsenetRelease>): Comparator<UsenetRelease> {
+        val audio = config.preferredAudioLanguage?.lowercase(Locale.ROOT)
+        val subtitles = config.preferredSubtitleLanguage?.lowercase(Locale.ROOT)
+        if (audio == null && subtitles == null) return sort
+
+        fun Set<String>.matches(code: String?) =
+            code != null && (code in this || any { it.startsWith("$code-") })
+
+        return compareByDescending<UsenetRelease> { it.audioLanguages.matches(audio) }
+            .thenByDescending { it.subtitleLanguages.matches(subtitles) }.then(sort)
     }
 
     private fun document(xml: String): Element {

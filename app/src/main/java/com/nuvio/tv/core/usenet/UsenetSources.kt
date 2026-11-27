@@ -85,8 +85,10 @@ data class UsenetSourceConfiguration(
     val excludeLowQuality: Boolean = true,
     /** On: lower indexer priorities are only searched when higher ones find nothing. */
     val indexerFallback: Boolean = false,
-    /** On: a release found by several indexers is shown once, from the highest priority. */
-    val hideDuplicates: Boolean = false
+    /** On: keep one matching copy of each release, breaking ties by indexer priority. */
+    val hideDuplicates: Boolean = false,
+    val preferredAudioLanguage: String? = null,
+    val preferredSubtitleLanguage: String? = null
 ) {
     val ready: Boolean get() = enabled && providers.any { it.enabled } && indexers.any { it.enabled }
 

@@ -112,6 +112,35 @@ class NewznabProtocolTest {
         assertTrue(releases.last().subtitleLanguages.isEmpty())
     }
 
+    @Test fun `language matches precede every sort and the limit without hiding unknowns`() {
+        val plain = UsenetRelease("Movie.2160p", "unknown", size = 10)
+        val audio = plain.copy(nzbUrl = "audio", audioLanguages = setOf("ja"))
+        val subs = plain.copy(nzbUrl = "subs", subtitleLanguages = setOf("nl"))
+        val both = audio.copy(nzbUrl = "both", subtitleLanguages = setOf("nl"), size = 1)
+        val largerBoth = both.copy(nzbUrl = "larger", size = 2)
+        val releases = listOf(plain, audio, subs, both)
+        val config = UsenetSourceConfiguration(preferredAudioLanguage = "ja", preferredSubtitleLanguage = "nl")
+        for (sort in UsenetSort.entries) {
+            assertEquals(listOf(both, audio, subs, plain), NewznabProtocol.arrange(releases, config.copy(sort = sort)))
+        }
+        assertEquals(listOf(largerBoth, both), NewznabProtocol.arrange(releases + largerBoth,
+            config.copy(sort = UsenetSort.LARGEST, maxResults = 2)))
+        assertEquals(subs, NewznabProtocol.arrange(listOf(audio, subs), config.copy(preferredAudioLanguage = null)).first())
+        assertEquals(audio, NewznabProtocol.arrange(listOf(subs, audio), config.copy(preferredSubtitleLanguage = null)).first())
+        assertEquals(plain, NewznabProtocol.arrange(listOf(plain, both), UsenetSourceConfiguration(sort = UsenetSort.LARGEST)).first())
+    }
+
+    @Test fun `duplicate selection prefers a playable copy with the requested subtitle language`() {
+        val second = indexer.copy(id = "two")
+        val config = UsenetSourceConfiguration(indexers = listOf(indexer, second), preferredSubtitleLanguage = "zh-TW")
+        val firstCopy = UsenetRelease("Movie", "a", indexerId = indexer.id, subtitleLanguages = setOf("zh"))
+        val match = firstCopy.copy(nzbUrl = "b", indexerId = second.id, subtitleLanguages = setOf("zh-tw"))
+        val candidates = listOf(firstCopy, match)
+        assertEquals(listOf(match), NewznabProtocol.withoutDuplicates(candidates, config))
+        assertEquals(listOf(firstCopy), NewznabProtocol.withoutDuplicates(candidates, config.copy(preferredSubtitleLanguage = "zh")))
+        assertEquals(listOf(firstCopy), NewznabProtocol.withoutDuplicates(listOf(firstCopy, match.copy(passworded = true)), config))
+    }
+
     @Test fun `repeated releases keep the highest priority copy that passes the filters`() {
         val low = indexer.copy(id = "low", priority = 2)
         val config = UsenetSourceConfiguration(indexers = listOf(indexer, low))
