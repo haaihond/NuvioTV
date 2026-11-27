@@ -41,7 +41,9 @@ data class UsenetRelease(
     val publishedAt: Long = 0,
     val indexerId: String = "",
     val indexerName: String = "",
-    val passworded: Boolean = false
+    val passworded: Boolean = false,
+    val audioLanguages: Set<String> = emptySet(),
+    val subtitleLanguages: Set<String> = emptySet()
 ) {
     val resolution: Int get() = Regex("(?i)(?<!\\d)(2160|1080|720|480|360)p?(?!\\d)")
         .find(title)?.groupValues?.get(1)?.toInt() ?: if (Regex("(?i)\\b4k\\b").containsMatchIn(title)) 2160 else 0
@@ -99,7 +101,8 @@ object NewznabProtocol {
             if ("season" in params) builder.setQueryParameter("season", request.season.toString())
             if ("ep" in params && !wholeSeason) builder.setQueryParameter("ep", request.episode.toString())
         }
-        return builder.setQueryParameter("cat", if (request.series) "5000" else "2000")
+        return builder.setQueryParameter("extended", "1")
+            .setQueryParameter("cat", if (request.series) "5000" else "2000")
             .setQueryParameter("limit", caps.limit.coerceIn(1, 100).toString())
             .setQueryParameter("offset", offset.toString()).build()
     }
@@ -132,10 +135,9 @@ object NewznabProtocol {
             val item = items.item(i) as Element
             fun text(tag: String) = item.getElementsByTagName(tag).item(0)?.textContent?.trim().orEmpty()
             val attrs = item.getElementsByTagNameNS("*", "attr")
-            val attributes = (0 until attrs.length).associate { j ->
-                val attr = attrs.item(j) as Element
-                attr.getAttribute("name").lowercase() to attr.getAttribute("value")
-            }
+            val attributes = (0 until attrs.length).map { attrs.item(it) as Element }.groupBy(
+                { it.getAttribute("name").lowercase(Locale.ROOT) }, { it.getAttribute("value") }
+            )
             val enclosures = item.getElementsByTagName("enclosure")
             val enclosure = (0 until enclosures.length).map { enclosures.item(it) as Element }
                 .firstOrNull { it.getAttribute("type").contains("nzb", ignoreCase = true) }
@@ -143,7 +145,7 @@ object NewznabProtocol {
                 ?: text("link").takeIf { it.isNotBlank() && enclosures.length == 0 } ?: return@mapNotNull null
             val url = indexer.apiUrl.toHttpUrl().resolve(download) ?: return@mapNotNull null
             val title = text("title").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val published = listOfNotNull(attributes["usenetdate"], text("pubDate")).firstNotNullOfOrNull { date ->
+            val published = listOfNotNull(attributes["usenetdate"]?.lastOrNull(), text("pubDate")).firstNotNullOfOrNull { date ->
                 runCatching { ZonedDateTime.parse(date, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }.getOrNull()
                     ?: runCatching { Instant.parse(date).toEpochMilli() }.getOrNull()
                     ?: date.toLongOrNull()?.takeIf { it > 0 && it < Long.MAX_VALUE / 1000 }?.let {
@@ -151,8 +153,11 @@ object NewznabProtocol {
                     }
             } ?: 0
             UsenetRelease(title, url.toString(),
-                (attributes["size"]?.toLongOrNull() ?: enclosure?.getAttribute("length")?.toLongOrNull() ?: 0).coerceAtLeast(0),
-                published, indexer.id, indexer.name, attributes["password"]?.lowercase() in setOf("1", "2", "true", "yes"))
+                (attributes["size"]?.lastOrNull()?.toLongOrNull() ?: enclosure?.getAttribute("length")?.toLongOrNull() ?: 0).coerceAtLeast(0),
+                published, indexer.id, indexer.name,
+                passworded = attributes["password"]?.lastOrNull()?.lowercase() in setOf("1", "2", "true", "yes"),
+                audioLanguages = NewznabLanguages.parse(attributes["language"].orEmpty()),
+                subtitleLanguages = NewznabLanguages.parse(attributes["subs"].orEmpty()))
         }
         val response = root.getElementsByTagNameNS("*", "response").item(0) as? Element
         return NewznabPage(results, response?.getAttribute("total")?.toIntOrNull() ?: results.size)

@@ -35,6 +35,7 @@ class NewznabProtocolTest {
         assertEquals("0", url.queryParameter("season"))
         assertEquals("2", url.queryParameter("ep"))
         assertEquals("tvsearch", url.queryParameter("t"))
+        assertEquals("1", url.queryParameter("extended"))
         assertEquals("secret &+key", url.queryParameter("apikey"))
         assertEquals("value", url.queryParameter("custom"))
         assertNull(NewznabProtocol.searchUrl(indexer, UsenetSearchRequest(imdbId = "tt123", series = true), NewznabCapabilities()))
@@ -91,6 +92,24 @@ class NewznabProtocolTest {
         assertTrue(release.passworded)
         assertTrue(release.publishedAt > 0)
         assertEquals("https://indexer.test/get?id=1&apikey=secret", release.nzbUrl)
+    }
+
+    @Test fun `indexer audio and subtitle attributes retain repeated and comma separated languages`() {
+        val releases = NewznabProtocol.releases("""
+            <rss xmlns:n="urn:newznab"><channel>
+              <item><title>Release</title><link>/one</link>
+                <n:attr name="language" value="Japanese, ENG"/>
+                <n:attr name="language" value="jpn"/>
+                <n:attr name="subs" value="Arabic (SA), Dutch"/>
+                <n:attr name="subs" value="Portuguese (BR), Spanish (Latin America), nld, zh-TW"/>
+              </item>
+              <item><title>Release.English.MULTi</title><link>/two</link></item>
+            </channel></rss>
+        """.trimIndent(), indexer).releases
+        assertEquals(setOf("ja", "en"), releases.first().audioLanguages)
+        assertEquals(setOf("ar", "nl", "pt-br", "es-419", "zh-tw"), releases.first().subtitleLanguages)
+        assertTrue(releases.last().audioLanguages.isEmpty())
+        assertTrue(releases.last().subtitleLanguages.isEmpty())
     }
 
     @Test fun `repeated releases keep the highest priority copy that passes the filters`() {
