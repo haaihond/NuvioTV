@@ -1,6 +1,8 @@
 package com.nuvio.tv.core.usenet
 
 import java.net.URI
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -110,6 +112,17 @@ class NewznabProtocolTest {
         assertEquals(setOf("ar", "nl", "pt-br", "es-419", "zh-tw"), releases.first().subtitleLanguages)
         assertTrue(releases.last().audioLanguages.isEmpty())
         assertTrue(releases.last().subtitleLanguages.isEmpty())
+    }
+
+    @Test fun `old profiles default to any language and new preferences persist independently`() {
+        val old = Json.decodeFromString<UsenetSourceConfiguration>("""{"sort":"LARGEST","maxResults":5}""")
+        assertNull(old.preferredAudioLanguage)
+        assertNull(old.preferredSubtitleLanguage)
+        val saved = old.copy(preferredAudioLanguage = "ja", preferredSubtitleLanguage = "nl")
+        assertEquals(saved, Json.decodeFromString<UsenetSourceConfiguration>(Json.encodeToString(saved)))
+        val onlySubs = saved.copy(preferredAudioLanguage = null)
+        assertEquals(old.copy(preferredSubtitleLanguage = "nl"),
+            Json.decodeFromString<UsenetSourceConfiguration>(Json.encodeToString(onlySubs)))
     }
 
     @Test fun `language matches precede every sort and the limit without hiding unknowns`() {

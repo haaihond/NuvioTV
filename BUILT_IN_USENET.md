@@ -48,8 +48,8 @@ priority.
 - **Indexers are all searched by default**, and their results merged. Their
   priority only matters through two options, both off by default:
   - **Hide repeated releases** shows a release found by several indexers once:
-    the copy from the highest priority (then list order) that passes the
-    filters. Names are compared ignoring case and punctuation.
+    among copies that pass the filters, preferred languages come first, then
+    indexer priority and list order. Names are compared ignoring case and punctuation.
   - **Search lower priorities only as fallback** searches equal priorities
     together and queries lower ones only when the higher ones produced no
     result that passes the filters (including when they failed). This saves
@@ -115,6 +115,11 @@ without a TMDB mapping cannot be searched.
 
 The **Built-in Usenet** result group updates as indexers finish, independently
 of addon/plugin searches. Sort by resolution, size, age or indexer priority.
+**Preferred audio language** and **Preferred subtitle language** each default to
+**Any**. Set either to move matching releases up. When both are set, matches for
+both come first, then audio alone, then subtitles alone. Your chosen sort orders
+releases within each group. Languages come from the indexer’s search result.
+Releases with missing language information are still eligible.
 Filters cover minimum resolution, maximum size, maximum age, CAM/screener
 releases and result count. Passworded NZBs are always excluded. Unknown sizes
 or dates are excluded when their corresponding maximum filter is enabled.

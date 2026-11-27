@@ -65,6 +65,7 @@ internal fun LanguageSelectionDialog(
     title: String,
     selectedLanguage: String?,
     showNoneOption: Boolean,
+    noneOptionLabel: String = stringResource(R.string.action_none),
     extraOptions: List<Pair<String, String>> = emptyList(),
     onLanguageSelected: (String?) -> Unit,
     onDismiss: () -> Unit
@@ -77,7 +78,7 @@ internal fun LanguageSelectionDialog(
     val originalHint = stringResource(R.string.audio_lang_original_hint)
     val languageOptions: List<SettingsPickerOption<String?>> = buildList {
         if (showNoneOption) {
-            add(SettingsPickerOption(null, stringResource(R.string.action_none)))
+            add(SettingsPickerOption(null, noneOptionLabel))
         }
         extraOptions.forEach { (code, name) ->
             add(SettingsPickerOption(
