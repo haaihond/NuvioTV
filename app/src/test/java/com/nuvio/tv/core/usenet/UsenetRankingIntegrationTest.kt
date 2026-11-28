@@ -27,6 +27,21 @@ class UsenetRankingIntegrationTest {
         assertEquals(listOf(big), NewznabProtocol.arrange(listOf(web, big), config.copy(maxSizeGb = 0)) { if (it == big) 0 else 1 })
     }
 
+    @Test fun `custom regex filters and track preferences both apply before the display limit`() {
+        val profile = StreamRankingProfile(rules = listOf(StreamRankingRule("Skip samples", action = StreamRankingAction.EXCLUDE,
+            conditions = listOf(StreamRankingCondition(StreamRankingField.TITLE, StreamRankingOperator.MATCHES, "sample")))))
+        val config = UsenetSourceConfiguration(ranking = StreamRankingSettings(StreamRankingPreset.CUSTOM, custom = profile),
+            audioLanguageFilters = UsenetLanguageRules(preferred = listOf("nl", "en")),
+            subtitleLanguageFilters = UsenetLanguageRules(included = listOf("en")), maxResults = 1)
+        val english = UsenetRelease("Movie.2160p", "en", audioLanguages = setOf("en"))
+        val dutch = UsenetRelease("Movie.720p", "nl", audioLanguages = setOf("nl"), subtitleLanguages = setOf("en"))
+        val sample = dutch.copy(title = "Movie.2160p.Sample", nzbUrl = "sample")
+        assertEquals(listOf(dutch), NewznabProtocol.arrange(listOf(english, sample, dutch), config))
+        assertEquals(listOf(english), NewznabProtocol.arrange(listOf(english, sample, dutch), config) {
+            if (it == dutch) 2 else 1
+        })
+    }
+
     @Test fun `episode size preferences use the complete pack episode count when available`() {
         val pack = UsenetRelease("Show.S01-S02.2160p.BluRay.REMUX-FraMeSToR", "https://a/pack", size = 80 * gb)
         val episode = UsenetRelease("Show.S01E01.1080p.WEB-DL-NTb", "https://a/episode", size = gb)
