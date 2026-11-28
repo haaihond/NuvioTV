@@ -1030,7 +1030,8 @@ internal fun <T> SettingsMultiChoiceDialog(
     onDismiss: () -> Unit,
     subtitle: String? = null,
     width: Dp = 520.dp,
-    maxHeight: Dp = 420.dp
+    maxHeight: Dp = 420.dp,
+    preserveSelectionOrder: Boolean = false
 ) {
     val focusRequester = remember { FocusRequester() }
     val selected = remember(selectedValues) { mutableStateListOf<T>().also { it.addAll(selectedValues) } }
@@ -1131,7 +1132,10 @@ internal fun <T> SettingsMultiChoiceDialog(
                 )
                 SettingsDialogActionButton(
                     text = stringResource(R.string.action_save),
-                    onClick = { onValuesSelected(options.map { it.value }.filter { selected.contains(it) }) },
+                    onClick = {
+                        onValuesSelected(if (preserveSelectionOrder) selected.toList()
+                            else options.map { it.value }.filter { it in selected })
+                    },
                     primary = true
                 )
             }

@@ -115,11 +115,26 @@ without a TMDB mapping cannot be searched.
 
 The **Built-in Usenet** result group updates as indexers finish, independently
 of addon/plugin searches. Sort by resolution, size, age or indexer priority.
-**Preferred audio language** and **Preferred subtitle language** each default to
-**Any**. Set either to move matching releases up. When both are set, matches for
-both come first, then audio alone, then subtitles alone. Your chosen sort orders
-releases within each group. Languages come from the indexer’s search result.
-Releases with missing language information are still eligible.
+
+**Audio languages** and **Subtitle languages** each have four lists. All start empty.
+A previous single language preference becomes the first preferred language.
+
+- **Required** keeps releases matching any choice on that list.
+- **Excluded** hides releases when every reported language for that track type is excluded.
+  An English and Dutch release stays eligible when you exclude only English.
+- **Included** keeps a matching release through both language lists and the quality, size
+  and age filters. Password checks, duplicate handling and the result limit still apply.
+- **Preferred** ranks releases by the first matching choice in **Preference order**.
+  Select a language and its new position with the TV remote. Turn off **Sort by
+  preferred languages** to pause ranking for that list. Audio order applies first,
+  then subtitle order, then your usual result sort.
+
+Audio and subtitle languages are read separately from Newznab metadata. Release
+names can also supply audio language hints and tags such as **Dual Audio**, **Multi**
+and **Dubbed**. A multi-subtitle label applies to subtitles. **Original** matches a
+language that agrees with the title’s original language from TMDB. **Unknown** matches
+when Nuvio has no language or tag for that track type.
+
 Filters cover minimum resolution, maximum size, maximum age, CAM/screener
 releases and result count. Passworded NZBs are always excluded. Unknown sizes
 or dates are excluded when their corresponding maximum filter is enabled.

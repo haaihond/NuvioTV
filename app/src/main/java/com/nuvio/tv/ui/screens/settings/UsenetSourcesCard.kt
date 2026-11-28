@@ -40,7 +40,6 @@ import com.nuvio.tv.core.usenet.*
 import java.text.DateFormat
 import java.util.Date
 import com.nuvio.tv.ui.components.NuvioDialog
-import com.nuvio.tv.ui.util.languageCodeToName
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.launch
 
@@ -74,9 +73,6 @@ internal fun UsenetSourcesCard(
         SettingsPickerOption(UsenetSort.INDEXER, stringResource(R.string.usenet_sort_indexer))
     )
     val unlimited = stringResource(R.string.usenet_no_limit)
-    val anyLanguage = stringResource(R.string.usenet_language_any)
-    val audioTitle = stringResource(R.string.usenet_preferred_audio_language)
-    val subtitleTitle = stringResource(R.string.usenet_preferred_subtitle_language)
     SettingsGroupCard(title = stringResource(R.string.usenet_sources_title)) {
         SettingsToggleRow(title = stringResource(R.string.usenet_builtin_enabled),
             subtitle = stringResource(R.string.usenet_builtin_description), checked = configuration.enabled,
@@ -113,11 +109,9 @@ internal fun UsenetSourcesCard(
         }
         SettingsActionRow(title = stringResource(R.string.usenet_sort_results), subtitle = null,
             value = sortOptions.first { it.value == configuration.sort }.title, onClick = { picker = "sort" })
-        SettingsActionRow(title = audioTitle, subtitle = null,
-            value = configuration.preferredAudioLanguage?.let(::languageCodeToName) ?: anyLanguage,
+        SettingsActionRow(title = stringResource(R.string.usenet_audio_languages), subtitle = null,
             onClick = { picker = "audioLanguage" })
-        SettingsActionRow(title = subtitleTitle, subtitle = stringResource(R.string.usenet_language_sort_hint),
-            value = configuration.preferredSubtitleLanguage?.let(::languageCodeToName) ?: anyLanguage,
+        SettingsActionRow(title = stringResource(R.string.usenet_subtitle_languages), subtitle = null,
             onClick = { picker = "subtitleLanguage" })
         SettingsActionRow(title = stringResource(R.string.usenet_min_resolution), subtitle = null,
             value = if (configuration.minResolution == 0) unlimited else "${configuration.minResolution}p",
@@ -138,15 +132,12 @@ internal fun UsenetSourcesCard(
             onDismiss = { picker = null })
         "audioLanguage", "subtitleLanguage" -> {
             val audio = picker == "audioLanguage"
-            LanguageSelectionDialog(
-                title = if (audio) audioTitle else subtitleTitle,
-                selectedLanguage = if (audio) configuration.preferredAudioLanguage else configuration.preferredSubtitleLanguage,
-                showNoneOption = true,
-                noneOptionLabel = anyLanguage,
-                onLanguageSelected = { language ->
-                    update(if (audio) configuration.copy(preferredAudioLanguage = language)
-                        else configuration.copy(preferredSubtitleLanguage = language))
-                    picker = null
+            UsenetLanguageDialog(
+                audio = audio,
+                rules = if (audio) configuration.audioRules else configuration.subtitleRules,
+                onUpdate = { rules ->
+                    update(if (audio) configuration.copy(audioLanguageFilters = rules, preferredAudioLanguage = null)
+                        else configuration.copy(subtitleLanguageFilters = rules, preferredSubtitleLanguage = null))
                 },
                 onDismiss = { picker = null }
             )
