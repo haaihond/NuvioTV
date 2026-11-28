@@ -23,7 +23,8 @@ data class UsenetSearchRequest(
     val year: Int? = null,
     val season: Int? = null,
     val episode: Int? = null,
-    val series: Boolean = false
+    val series: Boolean = false,
+    val originalLanguage: String? = null
 )
 
 @Serializable
@@ -43,8 +44,11 @@ data class UsenetRelease(
     val indexerName: String = "",
     val passworded: Boolean = false,
     val audioLanguages: Set<String> = emptySet(),
-    val subtitleLanguages: Set<String> = emptySet()
+    val subtitleLanguages: Set<String> = emptySet(),
+    val originalLanguage: String? = null
 ) {
+    internal val audioTags by lazy { NewznabLanguages.releaseTags(this, subtitles = false) }
+    internal val subtitleTags by lazy { NewznabLanguages.releaseTags(this, subtitles = true) }
     val resolution: Int get() = Regex("(?i)(?<!\\d)(2160|1080|720|480|360)p?(?!\\d)")
         .find(title)?.groupValues?.get(1)?.toInt() ?: if (Regex("(?i)\\b4k\\b").containsMatchIn(title)) 2160 else 0
     val lowQuality: Boolean get() = Regex("(?i)(?:^|[ ._-])(?:cam|hdcam|telesync|telecine|hdts|ts|tc|scr|dvdscr)(?:$|[ ._-])")
@@ -289,8 +293,15 @@ object NewznabProtocol {
     fun arrange(releases: List<UsenetRelease>, config: UsenetSourceConfiguration,
         now: Long = System.currentTimeMillis()): List<UsenetRelease> {
         val priority = config.indexers.mapIndexed { i, indexer -> indexer.id to i }.toMap()
+        val audio = config.audioRules
+        val subtitles = config.subtitleRules
         val filtered = releases.filter {
-            !it.passworded && (!config.excludeLowQuality || !it.lowQuality) &&
+            if (it.passworded) return@filter false
+            if ((audio.included.isNotEmpty() && audio.includes(it.audioTags)) ||
+                (subtitles.included.isNotEmpty() && subtitles.includes(it.subtitleTags))) return@filter true
+            if (audio.filters && !audio.allows(it.audioTags)) return@filter false
+            if (subtitles.filters && !subtitles.allows(it.subtitleTags)) return@filter false
+            (!config.excludeLowQuality || !it.lowQuality) &&
                 (config.minResolution == 0 || it.resolution >= config.minResolution) &&
                 (config.maxSizeGb == 0 || it.size in 1..config.maxSizeGb.toLong() * 1024 * 1024 * 1024) &&
                 (config.maxAgeDays == 0 || it.publishedAt > 0 && now - it.publishedAt <= config.maxAgeDays.toLong() * 86400000)
@@ -307,17 +318,14 @@ object NewznabProtocol {
             .distinctBy { it.nzbUrl }.take(config.maxResults)
     }
 
-    /** Audio is the first preference, subtitles the second. The chosen sort breaks ties. */
+    /** Each enabled language list ranks by its earliest match. The chosen sort breaks ties. */
     private fun preferLanguages(config: UsenetSourceConfiguration, sort: Comparator<UsenetRelease>): Comparator<UsenetRelease> {
-        val audio = config.preferredAudioLanguage?.lowercase(Locale.ROOT)
-        val subtitles = config.preferredSubtitleLanguage?.lowercase(Locale.ROOT)
-        if (audio == null && subtitles == null) return sort
-
-        fun Set<String>.matches(code: String?) =
-            code != null && (code in this || any { it.startsWith("$code-") })
-
-        return compareByDescending<UsenetRelease> { it.audioLanguages.matches(audio) }
-            .thenByDescending { it.subtitleLanguages.matches(subtitles) }.then(sort)
+        val audio = config.audioRules
+        val subtitles = config.subtitleRules
+        var ordered = sort
+        if (subtitles.sorts) ordered = compareBy<UsenetRelease> { subtitles.rank(it.subtitleTags) }.then(ordered)
+        if (audio.sorts) ordered = compareBy<UsenetRelease> { audio.rank(it.audioTags) }.then(ordered)
+        return ordered
     }
 
     private fun document(xml: String): Element {

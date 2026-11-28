@@ -87,9 +87,15 @@ data class UsenetSourceConfiguration(
     val indexerFallback: Boolean = false,
     /** On: keep one matching copy of each release, breaking ties by indexer priority. */
     val hideDuplicates: Boolean = false,
+    // Single selections saved by older versions.
     val preferredAudioLanguage: String? = null,
-    val preferredSubtitleLanguage: String? = null
+    val preferredSubtitleLanguage: String? = null,
+    val audioLanguageFilters: UsenetLanguageRules? = null,
+    val subtitleLanguageFilters: UsenetLanguageRules? = null
 ) {
+    val audioRules get() = audioLanguageFilters ?: UsenetLanguageRules(preferred = listOfNotNull(preferredAudioLanguage))
+    val subtitleRules get() = subtitleLanguageFilters ?: UsenetLanguageRules(preferred = listOfNotNull(preferredSubtitleLanguage))
+
     val ready: Boolean get() = enabled && providers.any { it.enabled } && indexers.any { it.enabled }
 
     /** List order is the hierarchy: by priority, then by the user's order within a priority. */

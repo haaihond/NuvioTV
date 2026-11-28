@@ -41,6 +41,26 @@ class BuiltInUsenetServiceTest {
     private fun release(indexer: UsenetIndexer, title: String = "Movie.2020.1080p") =
         UsenetRelease(title, "${indexer.apiUrl}/nzb/$title", indexerId = indexer.id, indexerName = indexer.name)
 
+    @Test fun `original language filters use one shared lookup even for an ID search`() = runTest {
+        val indexer = UsenetIndexer(id = "one", name = "One", apiUrl = "https://one.test/api")
+        val config = UsenetSourceConfiguration(enabled = true, providers = listOf(provider), indexers = listOf(indexer),
+            audioLanguageFilters = UsenetLanguageRules(required = listOf("original")))
+        val client = mockk<NewznabClient>()
+        coEvery { client.capabilities(indexer) } returns NewznabCapabilities()
+        coEvery { client.search(indexer, any(), any()) } returns listOf(
+            release(indexer, "Movie.2020.French"), release(indexer, "Movie.2020.English"))
+        val tmdb = mockk<TmdbService>()
+        val api = mockk<TmdbApi>()
+        coEvery { tmdb.ensureTmdbId("tt1", "movie") } returns "10"
+        coEvery { api.getMovieDetails(10, any(), any()) } returns Response.success(mockk<TmdbDetailsResponse>(relaxed = true) {
+            every { originalLanguage } returns "fr"
+        })
+        val found = BuiltInUsenetService(client, tmdb, api).search(config, "movie", "tt1", null, null)
+            .toList().mapNotNull { it.group }.last().streams
+        assertEquals(listOf("Movie.2020.French"), found.map { it.title })
+        coVerify(exactly = 1) { api.getMovieDetails(10, any(), any()) }
+    }
+
     @Test fun `every indexer is searched by default and repeated releases are kept unless hidden`() = runTest {
         val first = UsenetIndexer(id = "a", name = "A", apiUrl = "https://a.test/api", priority = 1)
         val backup = UsenetIndexer(id = "c", name = "C", apiUrl = "https://c.test/api", priority = 2)

@@ -280,6 +280,8 @@ class BuiltInUsenetService @Inject constructor(
             val title = async(start = CoroutineStart.LAZY) {
                 tmdbId.await()?.toIntOrNull()?.let { optionalLookup { titleRequest(request, it) } }
             }
+            val needsOriginal = config.audioRules.needsOriginal || config.subtitleRules.needsOriginal
+            if (needsOriginal) title.start()
             val releases = mutableListOf<UsenetRelease>()
             fun arranged() = NewznabProtocol.arrange(
                 if (config.hideDuplicates) NewznabProtocol.withoutDuplicates(releases, config) else releases, config)
@@ -308,7 +310,9 @@ class BuiltInUsenetService @Inject constructor(
                                 DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(cooldown.until)) + "."
                         } else "${indexer.name}: indexer search failed. Check the API URL, key and limits."))
                     } else {
-                        val found = result.getOrThrow()
+                        val original = if (needsOriginal) title.await()?.originalLanguage else null
+                        val found = if (original == null) result.getOrThrow()
+                            else result.getOrThrow().map { it.copy(originalLanguage = original) }
                         // Both can return the same release under different download URLs.
                         // When cross-indexer deduplication is enabled, arranged() handles both scopes.
                         releases += if (indexer.searchMode == UsenetSearchMode.BOTH && !config.hideDuplicates)
@@ -385,7 +389,8 @@ class BuiltInUsenetService @Inject constructor(
         val original = (details.originalTitle ?: details.originalName)
             ?.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
         return request.copy(imdbId = null, tmdbId = null, tvdbId = null, title = title, originalTitle = original,
-            year = (details.releaseDate ?: details.firstAirDate)?.take(4)?.toIntOrNull())
+            year = (details.releaseDate ?: details.firstAirDate)?.take(4)?.toIntOrNull(),
+            originalLanguage = details.originalLanguage)
     }
 
     private fun UsenetRelease.toStream(config: UsenetSourceConfiguration): Stream {
