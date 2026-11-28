@@ -14,6 +14,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.nuvio.tv.core.auth.AuthManager
 import com.nuvio.tv.core.profile.ProfileManager
+import com.nuvio.tv.data.local.AmbientModeDataStore
 import com.nuvio.tv.data.local.ContinueWatchingEnrichmentCache
 import com.nuvio.tv.data.local.ExperienceModeDataStore
 import com.nuvio.tv.data.local.PluginDataStore
@@ -87,11 +88,13 @@ private val localOnlyPlayerProfileSettingsKeys = setOf(
     "downmix_enabled",
     "audio_output_channels",
     "maintain_original_audio_on_downmix",
+    "downmix_lfe_level",
     "downmix_normalization_enabled",
     "tunneling_enabled",
     "force_optical_passthrough",
     "audio_amplification_db",
     "center_mix_level_db",
+    "night_mode",
     "persist_audio_amplification",
     "remember_audio_delay_per_device",
     "experimental_dv5_to_dv81_enabled",
@@ -100,6 +103,7 @@ private val localOnlyPlayerProfileSettingsKeys = setOf(
     "map_dv7_to_hevc",
     "dv7_libdovi_mode_override",
     "strip_hdr10plus_sei",
+    "chapter_title_enabled",
     "mpv_hardware_decode_mode",
     "frame_rate_matching",
     "frame_rate_matching_mode",
@@ -144,6 +148,11 @@ private val localOnlyPlayerProfileSettingsKeys = setOf(
     "nuvio_performance_mode_enabled"
 )
 
+// 4K trailers depend on the device's RAM, so a choice made on one device must not reach another.
+private val localOnlyTrailerProfileSettingsKeys = setOf(
+    "trailer_allow_4k"
+)
+
 private val credentialProfileSettingsKeys = mapOf(
     "debrid_settings" to setOf(
         "torbox_api_key",
@@ -160,6 +169,7 @@ internal fun shouldExcludePreferenceFromProfileSettingsSync(feature: String, key
         feature == "layout_settings" && keyName in localOnlyLayoutProfileSettingsKeys -> true
         feature == "layout_settings" && keyName == "search_discover_enabled" -> true
         feature == PLAYER_SETTINGS_FEATURE && keyName in localOnlyPlayerProfileSettingsKeys -> true
+        feature == "trailer_settings" && keyName in localOnlyTrailerProfileSettingsKeys -> true
         feature == PluginDataStore.FEATURE && keyName != PluginDataStore.GROUP_STREAMS_BY_REPOSITORY -> true
         keyName in credentialProfileSettingsKeys[feature].orEmpty() -> true
         else -> false
@@ -174,6 +184,7 @@ class ProfileSettingsSyncService @Inject constructor(
     private val profileDataStoreFactory: ProfileDataStoreFactory,
     private val syncClientIdentity: SyncClientIdentity,
     private val providerCredentialSyncService: ProviderCredentialSyncService,
+    private val mediaServerSyncService: MediaServerSyncService,
     private val tmdbSettingsDataStore: TmdbSettingsDataStore,
     private val metaRepository: MetaRepository,
     private val cwEnrichmentCache: ContinueWatchingEnrichmentCache
@@ -202,7 +213,8 @@ class ProfileSettingsSyncService @Inject constructor(
         "trakt_settings",
         "debrid_settings",
         "animeskip_settings",
-        "track_preference"
+        "track_preference",
+        AmbientModeDataStore.FEATURE
     )
 
     init {
@@ -218,10 +230,12 @@ class ProfileSettingsSyncService @Inject constructor(
         }
     }
 
-    suspend fun pushCurrentProfileToRemote(): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun pushCurrentProfileToRemote(): Result<Unit> =
+        pushProfileSettingsToRemote(profileManager.activeProfileId.value)
+
+    private suspend fun pushProfileSettingsToRemote(profileId: Int): Result<Unit> = withContext(Dispatchers.IO) {
         syncMutex.withLock {
             try {
-                val profileId = profileManager.activeProfileId.value
                 pushProfileToRemote(profileId)
                 Log.d(TAG, "Pushed profile settings blob for profile $profileId")
                 Result.success(Unit)
@@ -359,6 +373,7 @@ class ProfileSettingsSyncService @Inject constructor(
 
     fun requestForegroundPull(force: Boolean = false) {
         providerCredentialSyncService.requestForegroundPull(force)
+        mediaServerSyncService.requestForegroundPull(force)
         if (!authManager.isAuthenticated) return
 
         val now = SystemClock.elapsedRealtime()
@@ -562,13 +577,16 @@ class ProfileSettingsSyncService @Inject constructor(
                             }
                     }
                     combine(featureFlows) { signatures ->
-                        signatures.joinToString(separator = "||")
+                        profileId to signatures.joinToString(separator = "||")
                     }
+                        .distinctUntilChanged()
+                        // The first value is the profile's stored state, not a local edit. On a
+                        // profile switch it can be older than the cloud copy that is about to be
+                        // pulled, so pushing it would overwrite newer settings.
+                        .drop(1)
                 }
-                .distinctUntilChanged()
-                .drop(1)
                 .debounce(SETTINGS_PUSH_DEBOUNCE_MS)
-                .collect { signature ->
+                .collect { (profileId, signature) ->
                     if (!authManager.isAuthenticated) return@collect
                     if (applyingRemoteBlob) return@collect
                     if (profileDataStoreFactory.corruptedFileNames.isNotEmpty()) {
@@ -581,7 +599,8 @@ class ProfileSettingsSyncService @Inject constructor(
                         skipNextPushSignature = null
                         return@collect
                     }
-                    pushCurrentProfileToRemote()
+                    // A change debounced across a profile switch still belongs to the profile it was made on.
+                    pushProfileSettingsToRemote(profileId)
                 }
         }
     }
@@ -677,6 +696,7 @@ class ProfileSettingsSyncService @Inject constructor(
         val keyNames = when (feature) {
             "layout_settings" -> catalogKeysExcludedFromProfileSettingsBlob + localOnlyLayoutProfileSettingsKeys
             PLAYER_SETTINGS_FEATURE -> localOnlyPlayerProfileSettingsKeys
+            "trailer_settings" -> localOnlyTrailerProfileSettingsKeys
             else -> credentialProfileSettingsKeys[feature].orEmpty()
         }
         if (keyNames.isEmpty()) return emptyMap()

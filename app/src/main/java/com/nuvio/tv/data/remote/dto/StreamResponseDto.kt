@@ -99,7 +99,11 @@ data class BehaviorHintsDto(
     @Json(name = "proxyHeaders") val proxyHeaders: ProxyHeadersDto? = null,
     @Json(name = "videoHash") val videoHash: String? = null,
     @Json(name = "videoSize") val videoSize: Long? = null,
-    @Json(name = "filename") val filename: String? = null
+    @Json(name = "filename") val filename: String? = null,
+    @Json(name = "audioDelayMs") val audioDelayMs: Double? = null,
+    @Json(name = "audioDelayLanguage") val audioDelayLanguage: String? = null,
+    // Object, array or string: normalized by toStreamClearKeys.
+    @Json(name = "clearKeys") val clearKeys: Any? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -113,6 +117,7 @@ data class SubtitleDto(
     @Json(name = "id") val id: String? = null,
     @Json(name = "url") val url: String,
     @Json(name = "lang") val lang: String,
+    @Json(name = "label") val label: String? = null,
     @Json(name = "headers") val headers: Map<String, String>? = null
 )
 

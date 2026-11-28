@@ -2,12 +2,15 @@ package com.nuvio.tv.core.sync.androidtv
 
 import android.content.Context
 import android.util.Log
+import com.nuvio.tv.core.poster.CustomPosterScreen
+import com.nuvio.tv.core.poster.patternForScreen
+import com.nuvio.tv.core.poster.withCustomPosterArt
+import com.nuvio.tv.core.recommendations.TvRecommendationManager
 import com.nuvio.tv.data.local.CachedInProgressItem
 import com.nuvio.tv.data.local.CachedNextUpItem
 import com.nuvio.tv.data.local.ContinueWatchingEnrichmentCache
 import com.nuvio.tv.data.local.LayoutPreferenceDataStore
 import com.nuvio.tv.data.local.TraktSettingsDataStore
-import com.nuvio.tv.core.recommendations.TvRecommendationManager
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.ui.screens.home.ContinueWatchingItem
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -49,29 +52,13 @@ class AndroidTvChannelSyncService @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // The launcher channel is only visible while the app is in the background. Reconciling on
-    // every in-playback cache bump (~10s) thrashes the TvProvider and stops launchers like
-    // Projectivy from repainting. We instead reconcile once when the app goes to background
-    // (user returns to the launcher) — see [onForegroundChanged].
-    @Volatile private var appInForeground = false
-
-    /** Called from the host Activity's onStart/onStop. On background we reconcile once so the
-     *  channel reflects the latest watch progress exactly as the launcher regains foreground. */
-    fun onForegroundChanged(foreground: Boolean) {
-        val wasForeground = appInForeground
-        appInForeground = foreground
-        if (wasForeground && !foreground) {
-            scope.launch { reconcileFromCache() }
-        }
-    }
-
     @OptIn(FlowPreview::class)
     fun start() {
         if (!manager.isSupported()) {
             Log.d(TAG, "Non-leanback device; channel sync skipped")
             return
         }
-        TvChannelRefreshJobService.schedulePeriodic(context)
+        TvChannelRefreshJobService.cancelPeriodic(context)
 
         scope.launch {
             // Observe cache snapshot updates and settings changes to trigger reconciliation.
@@ -89,11 +76,6 @@ class AndroidTvChannelSyncService @Inject constructor(
             }
                 .debounce(DEBOUNCE_MS)
                 .collect { settings ->
-                    // Skip while the app is foregrounded — the launcher channel isn't visible
-                    // then, and reconciling on every ~10s in-playback cache bump thrashes the
-                    // provider (and stops launchers like Projectivy from repainting). The
-                    // background transition (onForegroundChanged) + periodic job cover it.
-                    if (appInForeground) return@collect
                     reconcileFromCache(settings)
                 }
         }
@@ -116,7 +98,13 @@ class AndroidTvChannelSyncService @Inject constructor(
         val nextUpItems = runCatching { cwEnrichmentCache.getNextUpSnapshot() }
             .getOrDefault(emptyList())
 
+        val posterPattern = patternForScreen(
+            layoutPreferenceDataStore.customPosterUrlPattern.first(),
+            CustomPosterScreen.TV_RECOMMENDATIONS,
+            layoutPreferenceDataStore.customPosterEnabledScreens.first()
+        )
         val channelItems = buildChannelItems(inProgressItems, nextUpItems, resolvedSettings)
+            .withCustomPosterArt(posterPattern)
 
         Log.d(
             TAG,

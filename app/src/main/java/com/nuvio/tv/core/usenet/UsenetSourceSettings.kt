@@ -27,12 +27,19 @@ class UsenetSourceSettings @Inject constructor(
     private val profiles: Lazy<ProfileManager>
 ) : ProfileScopedCredentialStore {
     private val preferences = context.getSharedPreferences("usenet_sources", Context.MODE_PRIVATE)
+    /** Told every provider list read or saved, so a provider's statistics follow it through edits. */
+    private val stats = UsenetSourceStats.get(context)
     private val revision = MutableStateFlow(0)
     private val json = Json { ignoreUnknownKeys = true }
     val snapshots get() = combine(profiles.get().activeProfileId, revision) { id, _ -> id to runCatching { read(id) } }
 
+    // Decrypting takes a keystore round trip, and screens read the sources on the main thread:
+    // each profile is decrypted once, and every later read is this copy. Guarded by this.
+    private val decrypted = HashMap<Int, UsenetSourceConfiguration>()
+
     @Synchronized
     fun read(profileId: Int = profiles.get().activeProfileId.value): UsenetSourceConfiguration {
+        decrypted[profileId]?.let { return it }
         val encrypted = preferences.getString("profile_$profileId", null) ?: return UsenetSourceConfiguration()
         // Do not silently overwrite credentials if the device keystore becomes unavailable.
         val bytes = Base64.decode(encrypted, Base64.NO_WRAP)
@@ -41,7 +48,10 @@ class UsenetSourceSettings @Inject constructor(
         cipher.updateAAD("profile_$profileId".toByteArray())
         return json.decodeFromString<UsenetSourceConfiguration>(
             cipher.doFinal(bytes.copyOfRange(12, bytes.size)).toString(Charsets.UTF_8)
-        )
+        ).also {
+            decrypted[profileId] = it
+            stats.knowProviders(it.providers)
+        }
     }
 
     @Synchronized
@@ -54,17 +64,22 @@ class UsenetSourceSettings @Inject constructor(
         check(preferences.edit().putString("profile_$profileId", Base64.encodeToString(bytes, Base64.NO_WRAP)).commit()) {
             "Could not save Usenet sources"
         }
+        decrypted[profileId] = value
+        stats.knowProviders(value.providers)
         revision.value += 1
     }
 
     @Synchronized
     override fun removeProfile(profileId: Int) {
+        // Dropped first: a failed write must not leave removed credentials readable.
+        decrypted.remove(profileId)
         check(preferences.edit().remove("profile_$profileId").commit())
         revision.value += 1
     }
 
     @Synchronized
     override fun clearAllProfiles() {
+        decrypted.clear()
         check(preferences.edit().clear().commit())
         revision.value += 1
     }

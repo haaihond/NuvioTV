@@ -1,5 +1,6 @@
 package com.nuvio.tv.core.usenet
 
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.Collections
 import kotlin.concurrent.thread
@@ -10,28 +11,29 @@ import org.junit.Test
 class NntpProviderTesterTest {
     /** Answers one connection: the greeting, then [replies] for each command prefix. */
     private class FakeNntp(greeting: String, replies: Map<String, String> = emptyMap()) : AutoCloseable {
-        private val server = ServerSocket(0)
+        // Only on 127.0.0.1, so other loopback addresses do not answer.
+        private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
         val port get() = server.localPort
         val commands: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
-        init {
-            thread(isDaemon = true) {
-                runCatching {
-                    server.accept().use { socket ->
-                        val input = socket.getInputStream().bufferedReader()
-                        val output = socket.getOutputStream()
-                        output.write("$greeting\r\n".toByteArray()); output.flush()
-                        while (true) {
-                            val line = input.readLine() ?: break
-                            commands += line
-                            val reply = replies.entries.firstOrNull { line.startsWith(it.key) }?.value ?: "205 bye"
-                            output.write("$reply\r\n".toByteArray()); output.flush()
-                            if (line == "QUIT") break
-                        }
+        private val worker = thread(isDaemon = true) {
+            runCatching {
+                server.accept().use { socket ->
+                    val input = socket.getInputStream().bufferedReader()
+                    val output = socket.getOutputStream()
+                    output.write("$greeting\r\n".toByteArray()); output.flush()
+                    while (true) {
+                        val line = input.readLine() ?: break
+                        commands += line
+                        val reply = replies.entries.firstOrNull { line.startsWith(it.key) }?.value ?: "205 bye"
+                        output.write("$reply\r\n".toByteArray()); output.flush()
+                        if (line == "QUIT") break
                     }
                 }
             }
         }
+
+        fun awaitSession() = worker.join(5_000)
 
         override fun close() = server.close()
     }
@@ -44,6 +46,7 @@ class NntpProviderTesterTest {
     @Test fun `signs in and quits`() = runBlocking {
         FakeNntp("200 welcome", auth).use { server ->
             assertEquals(ProviderTestResult.SUCCESS, NntpProviderTester().test(provider(server.port), allowPrivateNetwork = true))
+            server.awaitSession()
             assertEquals(listOf("AUTHINFO USER user", "AUTHINFO PASS pass", "QUIT"), server.commands.toList())
         }
     }
@@ -73,5 +76,17 @@ class NntpProviderTesterTest {
         }
         val closed = ServerSocket(0).use { it.localPort }
         assertEquals(ProviderTestResult.UNREACHABLE, NntpProviderTester().test(provider(closed), allowPrivateNetwork = true))
+    }
+
+    @Test fun `an address that does not answer does not hide the next one`() = runBlocking {
+        FakeNntp("200 welcome", auth).use { server ->
+            // Like a host whose IPv6 address has no route: the first address fails, the second answers.
+            val addresses = arrayOf(InetAddress.getByName("127.0.0.2"), InetAddress.getByName("127.0.0.1"))
+            val tester = NntpProviderTester { addresses }
+            assertEquals(ProviderTestResult.SUCCESS,
+                tester.test(provider(server.port).copy(host = "news.example.com"), allowPrivateNetwork = true))
+            server.awaitSession()
+            assertEquals(listOf("AUTHINFO USER user", "AUTHINFO PASS pass", "QUIT"), server.commands.toList())
+        }
     }
 }

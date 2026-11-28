@@ -2,6 +2,8 @@ package com.nuvio.tv.ui.screens.player
 
 import com.nuvio.tv.R
 import com.nuvio.tv.core.player.StreamFallbackSession
+import com.nuvio.tv.core.usenet.UnplayableReleases
+import com.nuvio.tv.core.usenet.UsenetSourceStats
 import com.nuvio.tv.core.usenet.UsenetSettings
 import com.nuvio.tv.core.usenet.UsenetSidecar
 import com.nuvio.tv.domain.model.Stream
@@ -15,10 +17,13 @@ import kotlinx.coroutines.yield
 internal fun PlayerRuntimeController.beginStreamFallbackSession(stream: Stream, streams: List<Stream>) {
     cancelStreamFallback()
     streamFallbackSession = if (stream.isUsenet()) {
+        val unplayable = UnplayableReleases.get(context)
         StreamFallbackSession(
             stream, streams,
             maxAttempts = UsenetSettings.read(context).fallbackMaxAttempts,
-            isEnabled = { UsenetSettings.read(context).fallbackEnabled }
+            isEnabled = { UsenetSettings.read(context).fallbackEnabled },
+            isUnplayable = { unplayable.contains(it) },
+            messages = com.nuvio.tv.core.player.streamFallbackMessages(context)
         )
     } else null
     streamFallbackResumePosition = null
@@ -46,19 +51,31 @@ internal suspend fun PlayerRuntimeController.resolveSelectedStreamWithFallback(
     val resolved = try {
         streamFallbackSession?.prepareCandidate(stream) { resolveFallbackCandidate(stream, season, episode) }
             ?: withTimeoutOrNull(120_000L) { resolveFallbackCandidate(stream, season, episode) }
-            ?: error("Stream preparation timed out")
+            ?: error(context.getString(R.string.usenet_preparation_timed_out))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
         val session = streamFallbackSession
         if (session == null || !session.canAdvance) throw error
         session.resolveNext { candidate, attempt ->
-            setLoadingStatus("stream_fallback", context.getString(R.string.player_trying_next_stream, attempt), showOverlay = true)
+            setLoadingStatus(
+                "stream_fallback",
+                com.nuvio.tv.core.player.nextStreamMessage(context, attempt, session.lastFailureReason),
+                showOverlay = true
+            )
             resolveFallbackCandidate(candidate, season, episode)
         }
     }
     resolved?.let { streamFallbackSession?.resolved(it) }
     return resolved
+}
+
+/** A Usenet release showed its first frame: results label it and fallback prefers it. */
+internal fun PlayerRuntimeController.recordPlayedRelease() {
+    val stream = streamFallbackSession?.current ?: return
+    if (!stream.isUsenet() || !UsenetSidecar.isSessionUrl(currentStreamUrl)) return
+    runCatching { UnplayableReleases.get(context).recordPlayed(stream) }
+    runCatching { UsenetSourceStats.get(context).played(stream.nzbUrl) }
 }
 
 /** Called only once the existing same-source/decoder recovery ladder has given up. */
@@ -78,6 +95,7 @@ internal fun PlayerRuntimeController.tryNextStream(detailedError: String): Boole
         ?: streamFallbackResumePosition ?: 0L
     val paused = userPausedManually
     streamFallbackError = detailedError
+    session.playbackFailed()
     cancelNextEpisodeAutoPlayOnFatalError()
     streamFallbackJob = scope.launch {
         // Avoid re-entering a player listener while it is still reporting the failure.
@@ -87,7 +105,9 @@ internal fun PlayerRuntimeController.tryNextStream(detailedError: String): Boole
             setLoadingStatus("stream_fallback", context.getString(R.string.player_finding_next_stream), showOverlay = true)
             val resolved = session.resolveNext { candidate, attempt ->
                 setLoadingStatus(
-                    "stream_fallback", context.getString(R.string.player_trying_next_stream, attempt), showOverlay = true
+                    "stream_fallback",
+                    com.nuvio.tv.core.player.nextStreamMessage(context, attempt, session.lastFailureReason),
+                    showOverlay = true
                 )
                 resolveFallbackCandidate(candidate, currentSeason, currentEpisode)
             }

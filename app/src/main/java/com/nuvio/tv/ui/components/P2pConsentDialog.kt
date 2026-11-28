@@ -38,6 +38,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,6 +52,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.ui.util.contentLayoutDirection
 import com.nuvio.tv.ui.util.contentTextDirection
 import kotlinx.coroutines.launch
+import com.nuvio.tv.ui.screens.ambient.AmbientDialogEffect
 
 @Composable
 fun P2pConsentDialog(
@@ -68,6 +71,7 @@ fun P2pConsentDialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        AmbientDialogEffect(onDismiss)
         CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
             Box(
                 modifier = Modifier
@@ -117,6 +121,11 @@ fun P2pConsentDialog(
                                 } else false
                             }
                             .focusable()
+                            // Merge the body copy into this focusable scroll node so it is
+                            // announced once, instead of as an unnamed container.
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = bodyText
+                            }
                     ) {
                         Text(
                             text = bodyText,

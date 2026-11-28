@@ -21,4 +21,16 @@ class ProfileSettingsCredentialPolicyTest {
         assertFalse(shouldExcludePreferenceFromProfileSettingsSync("mdblist_settings", "mdblist_enabled"))
         assertFalse(shouldExcludePreferenceFromProfileSettingsSync("animeskip_settings", "animeskip_enabled"))
     }
+
+    @Test
+    fun `show chapters syncs while device specific player settings stay local`() {
+        assertFalse(shouldExcludePreferenceFromProfileSettingsSync("player_settings", "exo_chapters_enabled"))
+        assertTrue(shouldExcludePreferenceFromProfileSettingsSync("player_settings", "tunneling_enabled"))
+    }
+
+    @Test
+    fun `4k trailers stay on the device while other trailer settings sync`() {
+        assertTrue(shouldExcludePreferenceFromProfileSettingsSync("trailer_settings", "trailer_allow_4k"))
+        assertFalse(shouldExcludePreferenceFromProfileSettingsSync("trailer_settings", "trailer_enabled"))
+    }
 }

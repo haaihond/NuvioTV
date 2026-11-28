@@ -5,6 +5,8 @@ import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import coil3.memory.MemoryCache
+import com.nuvio.tv.core.image.CustomPosterFallbackInterceptor
 import com.nuvio.tv.domain.model.CatalogRow
 import com.nuvio.tv.domain.model.Collection
 import com.nuvio.tv.domain.model.CollectionFolder
@@ -282,11 +284,35 @@ internal fun ModernCarouselItem.catalogCardRequestMetrics(
     return base.copy(width = maxOf(base.width, expandedWidth))
 }
 
+internal fun ModernCarouselItem.cardImageFallbackUrl(landscapeCustomPoster: Boolean): String? =
+    if (landscapeCustomPoster) {
+        metaPreview?.background ?: heroPreview.backdrop ?: metaPreview?.rawPosterUrl
+    } else {
+        metaPreview?.rawPosterUrl
+    }
+
+internal fun cardImageMemoryCacheKey(
+    url: String,
+    widthPx: Int,
+    heightPx: Int,
+    fallbackUrl: String?,
+    revalidationKey: Int = 0
+): MemoryCache.Key {
+    val key = "${url}_${widthPx}x${heightPx}_v$revalidationKey"
+    return if (!fallbackUrl.isNullOrBlank() && fallbackUrl != url) {
+        MemoryCache.Key(key, mapOf(CustomPosterFallbackInterceptor.FALLBACK_URL_KEY to fallbackUrl))
+    } else {
+        MemoryCache.Key(key)
+    }
+}
+
 
 internal fun buildContinueWatchingItem(
     item: ContinueWatchingItem,
     useLandscapePosters: Boolean,
     showImdbRatings: Boolean,
+    detailImdbRatingsVisibility: com.nuvio.tv.domain.model.DetailImdbRatingsVisibility =
+        com.nuvio.tv.domain.model.DetailImdbRatingsVisibility.SHOW_ALL,
     airsDateTemplate: String,
     upcomingLabel: String,
     context: android.content.Context
@@ -344,6 +370,7 @@ internal fun buildContinueWatchingItem(
                 yearText = extractYearOrRange(item.releaseInfo),
                 secondaryHighlightText = secondaryHighlightText,
                 imdbText = item.episodeImdbRating
+                    ?.takeIf { !isSeries || detailImdbRatingsVisibility.showEpisodeRating(isWatched = item.progress.isCompleted()) }
                     ?.let { String.format("%.1f", it) },
                 genres = item.genres.asStable(),
                 poster = item.progress.poster,
@@ -375,6 +402,7 @@ internal fun buildContinueWatchingItem(
                 yearText = extractYearOrRange(item.info.releaseInfo),
                 secondaryHighlightText = secondaryHighlightText,
                 imdbText = item.info.imdbRating
+                    ?.takeIf { detailImdbRatingsVisibility.showEpisodeRating(isWatched = false) }
                     ?.let { String.format("%.1f", it) },
                 genres = item.info.genres.asStable(),
                 poster = item.info.poster,
@@ -581,13 +609,10 @@ internal fun buildCollectionFolderItem(
     )
 }
 
+// One key per show, like the shuffle key: when its card moves to another episode it stays the
+// same row item, so focus stays on it instead of passing to the next card.
 internal fun continueWatchingItemKey(item: ContinueWatchingItem): String {
-    return item.shuffleFocusKey ?: when (item) {
-        is ContinueWatchingItem.InProgress ->
-            "cw_inprogress_${item.progress.contentId}_${item.progress.season ?: -1}_${item.progress.episode ?: -1}"
-        is ContinueWatchingItem.NextUp ->
-            "cw_nextup_${item.info.contentId}_${item.info.season}_${item.info.episode}"
-    }
+    return item.shuffleFocusKey ?: "cw_${item.contentId()}"
 }
 
 internal fun catalogRowKey(row: CatalogRow): String {

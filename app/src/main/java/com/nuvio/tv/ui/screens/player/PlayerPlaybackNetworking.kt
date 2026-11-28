@@ -5,11 +5,18 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.nuvio.tv.core.network.IPv4FirstDns
+import com.nuvio.tv.core.network.PlaybackSocketFactory
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
@@ -49,9 +56,11 @@ internal object PlayerPlaybackNetworking {
         OkHttpClient.Builder()
             .dispatcher(dispatcher)
             .dns(IPv4FirstDns())
+            .socketFactory(PlaybackSocketFactory)
             .eventListenerFactory(PlaybackConnectionEvents)
             .sslSocketFactory(sslContext.socketFactory, trustAllManager)
             .hostnameVerifier(playbackHostnameVerifier)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
@@ -74,7 +83,9 @@ internal object PlayerPlaybackNetworking {
         OkHttpClient.Builder()
             .dispatcher(dispatcher)
             .dns(IPv4FirstDns())
+            .socketFactory(PlaybackSocketFactory)
             .eventListenerFactory(PlaybackConnectionEvents)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
@@ -93,6 +104,60 @@ internal object PlayerPlaybackNetworking {
             .build()
     }
 
+    /**
+     * Hosts that rejected an HTTP/1.1 request with 403 but accepted the same request over HTTP/2.
+     * Kept in memory only (never persisted) so later requests to that host skip the failing
+     * HTTP/1.1 attempt. Bounded so it can never grow without limit.
+     */
+    private val http2Hosts: MutableSet<String> =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private const val HTTP2_HOSTS_MAX = 64
+
+    /**
+     * Playback stays on HTTP/1.1. Only for streams that carry addon proxyHeaders: if a request
+     * gets 403 over HTTP/1.1, it is repeated once over HTTP/2 (ALPN, falling back to HTTP/1.1).
+     * A successful retry marks the host, so the following requests go straight to HTTP/2.
+     * Cleartext URLs never negotiate HTTP/2 and are left alone. If the retry also fails, the
+     * original 403 is returned unchanged.
+     */
+    private class Http2On403Interceptor(private val http2Client: OkHttpClient) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            if (!request.url.isHttps) return chain.proceed(request)
+            val host = request.url.host
+            if (host in http2Hosts) return http2Client.newCall(request).execute()
+
+            val response = chain.proceed(request)
+            if (response.code != 403) return response
+
+            val retry = try {
+                http2Client.newCall(request).execute()
+            } catch (e: IOException) {
+                return response
+            }
+            return if (retry.isSuccessful) {
+                if (http2Hosts.size >= HTTP2_HOSTS_MAX) http2Hosts.clear()
+                http2Hosts.add(host)
+                response.close()
+                retry
+            } else {
+                retry.close()
+                response
+            }
+        }
+    }
+
+    internal fun withHttp2On403Fallback(http1Client: OkHttpClient): OkHttpClient {
+        // Same client (same interceptors, pool and dispatcher) but allowed to negotiate HTTP/2.
+        // It does not contain the retry interceptor below, so it cannot loop.
+        val http2Client = http1Client.newBuilder()
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            .build()
+        return http1Client.newBuilder()
+            .addInterceptor(Http2On403Interceptor(http2Client))
+            .build()
+    }
+
     fun createHttpClient(
         defaultHeaders: Map<String, String> = emptyMap(),
         useLongReadTimeout: Boolean = false
@@ -101,31 +166,25 @@ internal object PlayerPlaybackNetworking {
         if (useLongReadTimeout) {
             builder.readTimeout(LOOPBACK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
-        if (defaultHeaders.any { it.key.equals("Authorization", ignoreCase = true) }) {
-            // OkHttp strips the Authorization header on cross-host redirects.
-            // WebDAV servers behind reverse proxies commonly redirect to a
-            // different host/port, causing auth to be lost. A network
-            // interceptor ensures the header is always present on every
-            // outgoing request — same behavior as mpv/curl.
-            val authValue = defaultHeaders.entries
-                .first { it.key.equals("Authorization", ignoreCase = true) }
-                .value
+        val proxyHeaders = defaultHeaders.filterKeys { key ->
+            !key.equals("Range", ignoreCase = true)
+        }
+        if (proxyHeaders.isNotEmpty()) {
             builder.addNetworkInterceptor { chain ->
                 val request = chain.request()
-                if (request.header("Authorization") == null) {
-                    chain.proceed(
-                        request.newBuilder()
-                            .header("Authorization", authValue)
-                            .build()
-                    )
-                } else {
-                    chain.proceed(request)
+                val next = request.newBuilder()
+                for ((key, value) in proxyHeaders) {
+                    next.header(key, value)
                 }
+                chain.proceed(next.build())
             }
         }
-        return builder
+        val http1Client = builder
             .let { NuvioExoPlayerPerformanceHelper.applyNetworkOptimizations(it) }
             .build()
+        if (proxyHeaders.isEmpty()) return http1Client
+
+        return withHttp2On403Fallback(http1Client)
     }
 
     @UnstableApi
@@ -133,10 +192,19 @@ internal object PlayerPlaybackNetworking {
         defaultHeaders: Map<String, String> = emptyMap(),
         useLongReadTimeout: Boolean = false
     ): DataSource.Factory {
-        val client = createHttpClient(defaultHeaders, useLongReadTimeout)
+        val requestHeaders = defaultHeaders.mapNotNull { (rawKey, rawValue) ->
+            val key = rawKey.trim()
+            val value = rawValue.trim()
+            if (key.isEmpty() || value.isEmpty() || key.equals("Range", ignoreCase = true)) {
+                null
+            } else {
+                key to value
+            }
+        }.toMap()
+        val client = createHttpClient(requestHeaders, useLongReadTimeout)
         val httpFactory = OkHttpDataSource.Factory(client).apply {
-            setDefaultRequestProperties(defaultHeaders)
-            if (defaultHeaders.none { it.key.equals("User-Agent", ignoreCase = true) }) {
+            setDefaultRequestProperties(requestHeaders)
+            if (requestHeaders.none { it.key.equals("User-Agent", ignoreCase = true) }) {
                 setUserAgent(PlayerMediaSourceFactory.DEFAULT_USER_AGENT)
             }
         }

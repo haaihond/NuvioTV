@@ -1,12 +1,16 @@
 package com.nuvio.tv.core.server
 
 import com.nuvio.tv.R
+import com.nuvio.tv.core.streams.StreamRankingPreset
+import com.nuvio.tv.core.streams.StreamRankingPresets
+import com.nuvio.tv.core.streams.StreamRankingSettings
 import com.nuvio.tv.core.usenet.ProviderTestResult
 import com.nuvio.tv.core.usenet.UsenetIndexer
 import com.nuvio.tv.core.usenet.UsenetProvider
 import com.nuvio.tv.core.usenet.UsenetSearchMode
 import com.nuvio.tv.core.usenet.UsenetSourceConfiguration
 import com.nuvio.tv.core.usenet.messageRes
+import com.nuvio.tv.core.usenet.replaceOrAdd
 import fi.iki.elonen.NanoHTTPD
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
@@ -55,6 +59,9 @@ class UsenetSourcesConfigServer(
         }
         return when {
             session.method == Method.GET && session.uri == "/api/sources" -> serveSources()
+            session.method == Method.GET && session.uri == "/api/ranking" -> serveRanking()
+            session.method == Method.POST && session.uri == "/api/ranking" -> saveRanking(body)
+            session.method == Method.POST && session.uri == "/api/ranking/preview" -> previewRanking(body)
             session.method == Method.POST && session.uri == "/api/providers" -> saveProvider(body)
             session.method == Method.POST && session.uri == "/api/indexers" -> saveIndexer(body)
             session.method == Method.POST && session.uri == "/api/providers/test" -> testProvider(body)
@@ -76,10 +83,53 @@ class UsenetSourcesConfigServer(
         )))
     }
 
+    private fun serveRanking(): Response {
+        val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
+        val presets = listOf(
+            Triple(StreamRankingPreset.ORIGINAL, R.string.usenet_ranking_original, R.string.usenet_ranking_original_desc),
+            Triple(StreamRankingPreset.BALANCED, R.string.usenet_ranking_balanced, R.string.usenet_ranking_balanced_desc),
+            Triple(StreamRankingPreset.BEST_QUALITY, R.string.usenet_ranking_best, R.string.usenet_ranking_best_desc),
+            Triple(StreamRankingPreset.SMALLER_FILES, R.string.usenet_ranking_smaller, R.string.usenet_ranking_smaller_desc),
+            Triple(StreamRankingPreset.HD_SDR, R.string.usenet_ranking_hd_sdr, R.string.usenet_ranking_hd_sdr_desc)
+        ).map { (id, name, description) -> PhoneRankingPreset(id, text(name), text(description),
+            if (id == StreamRankingPreset.ORIGINAL) UsenetRankingPhone.original(configuration.sort) else StreamRankingPresets.profile(id)) }
+        val languages = listOf(PhoneRankingLanguage("", text(R.string.usenet_ranking_any_language))) +
+            StreamRankingPresets.languages.map { code -> PhoneRankingLanguage(code, when (code) {
+                "multi" -> text(R.string.usenet_ranking_multi_audio)
+                "dual" -> text(R.string.usenet_ranking_dual_audio)
+                else -> java.util.Locale.forLanguageTag(code).getDisplayLanguage(java.util.Locale.getDefault())
+            }) }
+        return ok(json.encodeToString(PhoneRanking(configuration.ranking,
+            configuration.ranking.profile() ?: UsenetRankingPhone.original(configuration.sort), presets, languages)))
+    }
+
+    private fun saveRanking(body: String): Response {
+        if (setup.configuration() == null) return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
+        val input = parse<StreamRankingSettings>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_ranking_invalid)
+        try { input.validate() } catch (e: IllegalArgumentException) { return invalidRanking(e) }
+        val saved = setup.save(text(R.string.usenet_ranking_title)) { it.copy(ranking = input) }
+        return if (saved) ok(json.encodeToString(Saved("ranking", text(R.string.usenet_phone_saved))))
+        else error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
+    }
+
+    private fun previewRanking(body: String): Response {
+        val input = parse<RankingPreviewRequest>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_ranking_invalid)
+        val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
+        return try {
+            ok(json.encodeToString(UsenetRankingPhone.preview(input, UsenetRankingPhone.original(configuration.sort),
+                configuration.indexers.withIndex().groupBy { it.value.name.lowercase(java.util.Locale.ROOT) }
+                    .mapValues { (_, entries) -> entries.minOf { it.index } })))
+        } catch (e: IllegalArgumentException) { invalidRanking(e) }
+    }
+
+    private fun invalidRanking(error: IllegalArgumentException) = newFixedLengthResponse(Response.Status.BAD_REQUEST, JSON,
+        json.encodeToString(Failure(error.message ?: text(R.string.usenet_ranking_invalid))))
+
     private fun saveProvider(body: String): Response {
         val input = parse<PhoneProvider>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_provider_invalid)
         val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
         val provider = input.merge(configuration.providers.find { it.id == input.id })
+            ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_phone_secret_needed)
         if (runCatching { provider.validate() }.isFailure) return error(Response.Status.BAD_REQUEST, R.string.usenet_provider_invalid)
         val saved = setup.save(provider.name) { it.copy(providers = it.providers.replaceOrAdd(provider) { p -> p.id }) }
         return if (saved) ok(json.encodeToString(Saved(provider.id, text(R.string.usenet_phone_saved))))
@@ -90,6 +140,7 @@ class UsenetSourcesConfigServer(
         val input = parse<PhoneIndexer>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_indexer_invalid)
         val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
         val indexer = input.merge(configuration.indexers.find { it.id == input.id })
+            ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_phone_secret_needed)
         if (runCatching { indexer.validate() }.isFailure) return error(Response.Status.BAD_REQUEST, R.string.usenet_indexer_invalid)
         val saved = setup.save(indexer.name) { it.copy(indexers = it.indexers.replaceOrAdd(indexer) { i -> i.id }) }
         return if (saved) ok(json.encodeToString(Saved(indexer.id, text(R.string.usenet_phone_saved))))
@@ -100,6 +151,7 @@ class UsenetSourcesConfigServer(
         val input = parse<PhoneProvider>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_provider_invalid)
         val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
         val provider = input.merge(configuration.providers.find { it.id == input.id })
+            ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_phone_secret_needed)
         val result = setup.testProvider(provider) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_provider_invalid)
         val anonymous = provider.username.isEmpty() && provider.password.isEmpty()
         return ok(json.encodeToString(Tested(result == ProviderTestResult.SUCCESS, text(result.messageRes(anonymous)))))
@@ -109,6 +161,7 @@ class UsenetSourcesConfigServer(
         val input = parse<PhoneIndexer>(body) ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_indexer_invalid)
         val configuration = setup.configuration() ?: return error(Response.Status.CONFLICT, R.string.usenet_phone_unavailable)
         val indexer = input.merge(configuration.indexers.find { it.id == input.id })
+            ?: return error(Response.Status.BAD_REQUEST, R.string.usenet_phone_secret_needed)
         if (runCatching { indexer.validate() }.isFailure) return error(Response.Status.BAD_REQUEST, R.string.usenet_indexer_invalid)
         val success = setup.testIndexer(indexer)
         return ok(json.encodeToString(Tested(success, text(if (success) R.string.usenet_test_success else R.string.usenet_test_failed))))
@@ -119,7 +172,7 @@ class UsenetSourcesConfigServer(
     /** Null when the body is too large to read. */
     private fun read(session: IHTTPSession): String? {
         val length = session.headers["content-length"]?.toIntOrNull() ?: return ""
-        if (length !in 0..MAX_BODY) return null
+        if (length !in 0..(if (session.uri.startsWith("/api/ranking")) MAX_RANKING_BODY else MAX_BODY)) return null
         val buffer = ByteArray(length)
         var offset = 0
         while (offset < length) {
@@ -141,8 +194,13 @@ class UsenetSourcesConfigServer(
 
     companion object {
         const val TOKEN_HEADER = "x-setup-token"
+        const val ADD_PARAM = "a"
+        const val ADD_PROVIDER = "provider"
+        const val ADD_INDEXER = "indexer"
+        const val OPEN_RANKING = "ranking"
         private const val JSON = "application/json; charset=utf-8"
         private const val MAX_BODY = 16 * 1024
+        private const val MAX_RANKING_BODY = 64 * 1024
 
         fun startOnAvailablePort(
             setup: UsenetPhoneSetup,
@@ -182,11 +240,19 @@ internal data class PhoneProvider(
     val priority: Int = 1,
     val enabled: Boolean = true
 ) {
-    /** Edits [existing] when the phone edited a saved provider, so its id and enabled state are kept. */
-    fun merge(existing: UsenetProvider?) = (existing ?: UsenetProvider()).copy(
-        name = name.trim(), host = host.trim(), port = port, tls = tls, username = username,
-        password = password.ifEmpty { existing?.password.orEmpty() }, connections = connections, priority = priority
-    )
+    /**
+     * Edits [existing] when the phone edited a saved provider, so its id and enabled state are kept.
+     * A blank password keeps the saved one only for the server it was saved for, so it is never sent
+     * to another host. Null when the host, port, TLS setting or username changed and it is needed again.
+     */
+    fun merge(existing: UsenetProvider?): UsenetProvider? {
+        val edited = (existing ?: UsenetProvider()).copy(name = name.trim(), host = host.trim(), port = port, tls = tls,
+            username = username, password = password, connections = connections, priority = priority)
+        if (password.isNotEmpty() || existing == null || existing.password.isEmpty()) return edited
+        val sameServer = edited.host == existing.host && edited.port == existing.port && edited.tls == existing.tls &&
+            edited.username == existing.username
+        return if (sameServer) edited.copy(password = existing.password) else null
+    }
 
     companion object {
         fun of(provider: UsenetProvider) = PhoneProvider(provider.id, provider.name, provider.host, provider.port,
@@ -201,23 +267,40 @@ internal data class PhoneIndexer(
     val id: String? = null,
     val name: String = "",
     val apiUrl: String = "",
+    val apiPath: String = "",
     val apiKey: String = "",
     val hasKey: Boolean = false,
     val priority: Int = 1,
     val enabled: Boolean = true,
+    /** Shown in the list only: the URL with its API path. */
+    val endpoint: String = "",
+    /** Missing preserves an existing choice; -1 selects the global default, zero means unlimited. */
+    val fetchResultsLimit: Int? = null,
     val searchMode: UsenetSearchMode? = null
 ) {
-    fun merge(existing: UsenetIndexer?) = (existing ?: UsenetIndexer()).copy(
-        name = name.trim(), apiUrl = apiUrl.trim(), apiKey = apiKey.trim().ifEmpty { existing?.apiKey.orEmpty() },
-        priority = priority, searchMode = searchMode ?: existing?.searchMode ?: UsenetSearchMode.AUTO
-    )
+    /**
+     * Edits [existing] like [PhoneProvider.merge]. The phone gets the URL without its query, which can
+     * hold keys; the same URL coming back keeps the saved one. A blank API key keeps the saved one
+     * only for the same endpoint; null when the endpoint changed and the key is needed again.
+     */
+    fun merge(existing: UsenetIndexer?): UsenetIndexer? {
+        val url = apiUrl.trim().let { if (existing != null && it == withoutQuery(existing.apiUrl)) existing.apiUrl else it }
+        val edited = (existing ?: UsenetIndexer()).copy(name = name.trim(), apiUrl = url, apiPath = apiPath.trim(),
+            apiKey = apiKey.trim(), priority = priority, searchMode = searchMode ?: existing?.searchMode ?: UsenetSearchMode.AUTO,
+            fetchResultsLimit = when (fetchResultsLimit) {
+                null -> existing?.fetchResultsLimit
+                -1 -> null
+                else -> fetchResultsLimit
+            })
+        if (edited.apiKey.isNotEmpty() || existing == null || existing.apiKey.isEmpty()) return edited
+        return if (edited.endpoint == existing.endpoint) edited.copy(apiKey = existing.apiKey) else null
+    }
 
     companion object {
-        fun of(indexer: UsenetIndexer) = PhoneIndexer(indexer.id, indexer.name, indexer.apiUrl,
-            hasKey = indexer.apiKey.isNotEmpty(), priority = indexer.priority, enabled = indexer.enabled,
-            searchMode = indexer.searchMode)
+        fun of(indexer: UsenetIndexer) = PhoneIndexer(indexer.id, indexer.name, withoutQuery(indexer.apiUrl),
+            indexer.apiPath, hasKey = indexer.apiKey.isNotEmpty(), priority = indexer.priority,
+            enabled = indexer.enabled, searchMode = indexer.searchMode, endpoint = withoutQuery(indexer.endpoint), fetchResultsLimit = indexer.fetchResultsLimit ?: -1)
+
+        private fun withoutQuery(url: String) = url.substringBefore('?')
     }
 }
-
-private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
-    if (any { id(it) == id(value) }) map { if (id(it) == id(value)) value else it } else this + value

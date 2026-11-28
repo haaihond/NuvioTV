@@ -1,20 +1,44 @@
 package com.nuvio.tv.core.player
 
 import android.content.Context
+import android.text.Layout
 import android.util.Log
+import androidx.compose.ui.geometry.Rect
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.data.local.PlayerSettingsDataStore
+import com.nuvio.tv.data.local.SubtitleStyleSettings
+import com.nuvio.tv.data.local.TrailerSettingsDataStore
+import com.nuvio.tv.data.trailer.InAppYouTubeExtractor
+import com.nuvio.tv.data.trailer.TrailerSubtitleTrack
+import com.nuvio.tv.data.trailer.pickTrailerSubtitle
+import com.nuvio.tv.ui.screens.player.SdhFilteringTextOutput
+import com.nuvio.tv.ui.screens.settings.MemoryBudget
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Application-scoped singleton that holds a single ExoPlayer instance dedicated to
@@ -33,29 +57,90 @@ import kotlinx.coroutines.flow.first
 @Singleton
 class TrailerPlayerPool @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val playerSettingsDataStore: PlayerSettingsDataStore
+    private val playerSettingsDataStore: PlayerSettingsDataStore,
+    private val trailerSettingsDataStore: TrailerSettingsDataStore,
+    private val youTubeExtractor: InAppYouTubeExtractor
 ) {
     companion object {
         private const val TAG = "TrailerPlayerPool"
+
+        // A trailer plays on top of the home UI and its image caches, so it gets a small byte cap
+        // rather than Media3's default (~144 MB for video + audio). Low-RAM sticks get the smallest.
+        private const val LOW_RAM_TRAILER_BUFFER_MB = 48
+        private const val TRAILER_BUFFER_MB = 100
+        private const val HANDOFF_TIMEOUT_MS = 5_000L
     }
 
     private var _player: ExoPlayer? = null
+    private var owner: Any? = null
+    private var loadedVideoUrl: String? = null
+    private var ownerLetterboxZoom: Float? = null
+    private var ownerBounds: Rect? = null
+    private var pendingHandoff: TrailerHandoff? = null
+    private var handoffTimeoutJob: Job? = null
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val yielded = AtomicBoolean(false)
     private val released = AtomicBoolean(false)
+    private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _isTrailerPlaying = MutableStateFlow(false)
+    val isTrailerPlaying: StateFlow<Boolean> = _isTrailerPlaying.asStateFlow()
+
+    private val _subtitleStyle = MutableStateFlow(SubtitleStyleSettings())
+    val subtitleStyle: StateFlow<SubtitleStyleSettings> = _subtitleStyle.asStateFlow()
 
     @Volatile
     private var cachedForceNative: Boolean = false
 
+    @Volatile
+    private var cachedPlayerSettings: PlayerSettings? = null
+
+    @Volatile
+    private var cachedAllow4k: Boolean = TrailerVideoPolicy.default4kTrailers(context)
+
+    @Volatile
+    private var cachedPlayInBackground: Boolean = false
+
+    // Height cap currently applied to the player's track selection; reset when the player is rebuilt.
+    private var appliedMaxHeight: Int? = null
+
+    // Kept current so a player rebuilt after [yield] picks up buffer changes made since launch.
     init {
-        Thread {
-            try {
-                cachedForceNative = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                    playerSettingsDataStore.nuvioPerformanceModeEnabled.first()
+        settingsScope.launch {
+            runCatching {
+                trailerSettingsDataStore.settings.collect {
+                    cachedAllow4k = it.allow4k
+                    cachedPlayInBackground = it.playInBackground
                 }
-            } catch (_: Exception) {
-                cachedForceNative = false
             }
-        }.start()
+        }
+        settingsScope.launch {
+            runCatching {
+                playerSettingsDataStore.nuvioPerformanceModeEnabled.collect { cachedForceNative = it }
+            }
+        }
+        settingsScope.launch {
+            runCatching {
+                playerSettingsDataStore.playerSettings.collect {
+                    cachedPlayerSettings = it
+                    _subtitleStyle.value = it.subtitleStyle
+                }
+            }
+        }
+    }
+
+    /**
+     * Resolves the subtitle track to sideload for [streamUrl], or null when trailer
+     * subtitles are off, the trailer has no captions, or none of them match.
+     */
+    suspend fun subtitleFor(streamUrl: String): TrailerSubtitleTrack? {
+        val settings = trailerSettingsDataStore.settings.first()
+        if (!settings.subtitlesEnabled) return null
+        val style = playerSettingsDataStore.playerSettings.first().subtitleStyle
+        return pickTrailerSubtitle(
+            youTubeExtractor.captionTracks(streamUrl),
+            style.preferredLanguage,
+            style.secondaryPreferredLanguage
+        )
     }
 
     /**
@@ -68,7 +153,24 @@ class TrailerPlayerPool @Inject constructor(
             // Reclaim was not called yet but someone wants the player — rebuild.
             reclaim()
         }
-        return _player ?: createPlayer().also { _player = it }
+        val player = _player ?: createPlayer().also {
+            _player = it
+            appliedMaxHeight = null
+        }
+        applyVideoSizeCap(player)
+        return player
+    }
+
+    // Caps HLS variants; adaptive YouTube streams are already capped by the extractor.
+    private fun applyVideoSizeCap(player: ExoPlayer) {
+        val maxHeight = TrailerVideoPolicy.maxTrailerVideoHeight(cachedAllow4k)
+        if (appliedMaxHeight == maxHeight) return
+        val maxWidth = if (maxHeight == Int.MAX_VALUE) Int.MAX_VALUE else maxHeight * 16 / 9
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setMaxVideoSize(maxWidth, maxHeight)
+            .build()
+        appliedMaxHeight = maxHeight
     }
 
     /**
@@ -76,6 +178,9 @@ class TrailerPlayerPool @Inject constructor(
      * Call this when the trailer is no longer visible (poster lost focus, screen change).
      */
     fun stop() {
+        clearHandoff()
+        owner = null
+        loadedVideoUrl = null
         _player?.let { player ->
             runCatching {
                 player.playWhenReady = false
@@ -83,6 +188,95 @@ class TrailerPlayerPool @Inject constructor(
                 player.clearMediaItems()
             }
         }
+        _isTrailerPlaying.value = false
+    }
+
+    fun stopIfOwner(token: Any) {
+        if (pendingHandoff != null) return
+        if (owner === token) stop()
+    }
+
+    fun isOwnerOrFree(token: Any): Boolean = owner == null || owner === token
+
+    fun onMediaLoaded(token: Any, videoUrl: String) {
+        owner = token
+        loadedVideoUrl = videoUrl
+        ownerLetterboxZoom = null
+        ownerBounds = null
+    }
+
+    fun isLoadedBy(token: Any, videoUrl: String): Boolean = owner === token && loadedVideoUrl == videoUrl
+
+    fun onMediaCleared(token: Any) {
+        if (owner !== token) return
+        loadedVideoUrl = null
+        ownerBounds = null
+        ownerLetterboxZoom = null
+    }
+
+    fun onOwnerBounds(token: Any, bounds: Rect) {
+        if (owner === token) ownerBounds = bounds
+    }
+
+    fun onLetterboxZoomChanged(token: Any, zoom: Float) {
+        if (owner === token) ownerLetterboxZoom = zoom
+    }
+
+    fun beginHandoff(
+        itemId: String,
+        videoUrl: String,
+        audioUrl: String?,
+        youtubeKey: String?
+    ): Boolean {
+        val player = _player ?: return false
+        if (loadedVideoUrl != videoUrl) return false
+        if (!player.playWhenReady || player.playbackState == Player.STATE_ENDED || player.currentMediaItem == null) {
+            return false
+        }
+        pendingHandoff = TrailerHandoff(
+            itemId = itemId,
+            videoUrl = videoUrl,
+            audioUrl = audioUrl,
+            youtubeKey = youtubeKey,
+            playInBackground = cachedPlayInBackground,
+            letterboxZoom = ownerLetterboxZoom,
+            sourceBounds = ownerBounds
+        )
+        handoffTimeoutJob?.cancel()
+        handoffTimeoutJob = mainScope.launch {
+            delay(HANDOFF_TIMEOUT_MS)
+            if (pendingHandoff != null) stop()
+        }
+        return true
+    }
+
+    fun peekHandoff(itemId: String): TrailerHandoff? = pendingHandoff?.takeIf { it.itemId == itemId }
+
+    fun pendingHandoffFor(videoUrl: String?): TrailerHandoff? =
+        pendingHandoff?.takeIf { videoUrl != null && it.videoUrl == videoUrl && loadedVideoUrl == videoUrl }
+
+    fun claimHandoff(token: Any, videoUrl: String): TrailerHandoff? {
+        val handoff = pendingHandoffFor(videoUrl) ?: return null
+        clearHandoff()
+        owner = token
+        ownerLetterboxZoom = handoff.letterboxZoom
+        ownerBounds = null
+        return handoff
+    }
+
+    fun cancelHandoff(itemId: String) {
+        if (pendingHandoff?.itemId == itemId) stop()
+    }
+
+    fun isHandoffPending(): Boolean = pendingHandoff != null
+
+    val playInBackgroundPreference: Boolean
+        get() = cachedPlayInBackground
+
+    private fun clearHandoff() {
+        pendingHandoff = null
+        handoffTimeoutJob?.cancel()
+        handoffTimeoutJob = null
     }
 
     /**
@@ -92,6 +286,10 @@ class TrailerPlayerPool @Inject constructor(
     fun yield() {
         if (yielded.compareAndSet(false, true)) {
             Log.d(TAG, "Yielding trailer player for detail playback")
+            _isTrailerPlaying.value = false
+            clearHandoff()
+            owner = null
+            loadedVideoUrl = null
             _player?.let { player ->
                 runCatching { player.stop() }
                 runCatching { player.clearMediaItems() }
@@ -117,6 +315,7 @@ class TrailerPlayerPool @Inject constructor(
      */
     fun release() {
         if (released.compareAndSet(false, true)) {
+            _isTrailerPlaying.value = false
             _player?.let { player ->
                 runCatching { player.stop() }
                 runCatching { player.clearMediaItems() }
@@ -128,7 +327,12 @@ class TrailerPlayerPool @Inject constructor(
 
     private fun createPlayer(): ExoPlayer {
         val forceNative = cachedForceNative
-        Log.d(TAG, "Creating shared trailer ExoPlayer instance with forceNativeAllocation = $forceNative")
+        val targetBufferMb = trailerTargetBufferMb(cachedPlayerSettings)
+        Log.d(
+            TAG,
+            "Creating shared trailer ExoPlayer instance with forceNativeAllocation = $forceNative, " +
+                "targetBufferMb = $targetBufferMb"
+        )
         val loadControlBuilder = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 30_000,
@@ -136,6 +340,10 @@ class TrailerPlayerPool @Inject constructor(
                 /* bufferForPlaybackMs = */ 5_000,
                 /* bufferForPlaybackAfterRebufferMs = */ 10_000
             )
+            .setTargetBufferBytes(targetBufferMb * 1024 * 1024)
+            // The byte cap must hold even before minBufferMs is reached, or a high-bitrate
+            // trailer keeps allocating until the process is killed for low memory.
+            .setPrioritizeTimeOverSizeThresholds(false)
         if (forceNative) {
             val allocator = DefaultAllocator(
                 /* trimOnReset = */ true,
@@ -155,7 +363,24 @@ class TrailerPlayerPool @Inject constructor(
                     .setMaxVideoSize(Integer.MAX_VALUE, Integer.MAX_VALUE)
             )
         }
-        return ExoPlayer.Builder(context)
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildTextRenderers(
+                context: Context,
+                output: TextOutput,
+                outputLooper: android.os.Looper,
+                extensionRendererMode: Int,
+                out: ArrayList<Renderer>
+            ) {
+                super.buildTextRenderers(
+                    context,
+                    SdhFilteringTextOutput(CenteredTextOutput(output)) { cachedPlayerSettings?.subtitleStyle?.stripSdh == true },
+                    outputLooper,
+                    extensionRendererMode,
+                    out
+                )
+            }
+        }
+        return ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
             .setBandwidthMeter(
@@ -167,6 +392,58 @@ class TrailerPlayerPool @Inject constructor(
             .build()
             .apply {
                 repeatMode = Player.REPEAT_MODE_OFF
+                addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        _isTrailerPlaying.value = isPlaying
+                    }
+                })
             }
     }
+
+    /** Trailer cap for this device tier, lowered further when the user set a smaller Target Buffer Size. */
+    private fun trailerTargetBufferMb(settings: PlayerSettings?): Int {
+        val tierCapMb = if (MemoryBudget.isLowRamTier) LOW_RAM_TRAILER_BUFFER_MB else TRAILER_BUFFER_MB
+        val userTargetMb = settings
+            ?.takeIf { it.bufferEngineEnabled && !it.bufferBudgetManaged }
+            ?.let { MemoryBudget.effectiveBufferMb(it.bufferSettings.targetBufferSizeMb) }
+            ?: return tierCapMb
+        return userTargetMb.coerceAtMost(tierCapMb)
+    }
 }
+
+/**
+ * YouTube caption tracks carry their own placement (commonly `align:start
+ * position:0%`), which drops trailer subtitles into a corner. Clearing the cue
+ * geometry lets SubtitleView fall back to its standard centred bottom position.
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+private class CenteredTextOutput(private val delegate: TextOutput) : TextOutput {
+    override fun onCues(cueGroup: CueGroup) {
+        delegate.onCues(CueGroup(cueGroup.cues.map(::center), cueGroup.presentationTimeUs))
+    }
+
+    @Suppress("DEPRECATION")
+    @Deprecated("Uses the deprecated Media3 callback for text outputs.")
+    override fun onCues(cues: List<Cue>) {
+        delegate.onCues(cues.map(::center))
+    }
+
+    private fun center(cue: Cue): Cue = cue.buildUpon()
+        .setPosition(Cue.DIMEN_UNSET)
+        .setPositionAnchor(Cue.TYPE_UNSET)
+        .setLine(Cue.DIMEN_UNSET, Cue.LINE_TYPE_FRACTION)
+        .setLineAnchor(Cue.TYPE_UNSET)
+        .setSize(Cue.DIMEN_UNSET)
+        .setTextAlignment(Layout.Alignment.ALIGN_CENTER)
+        .build()
+}
+
+data class TrailerHandoff(
+    val itemId: String,
+    val videoUrl: String,
+    val audioUrl: String?,
+    val youtubeKey: String?,
+    val playInBackground: Boolean,
+    val letterboxZoom: Float?,
+    val sourceBounds: Rect?
+)

@@ -12,9 +12,17 @@ import com.nuvio.tv.core.server.DeviceIpAddress
 import com.nuvio.tv.core.server.UsenetPhoneSetup
 import com.nuvio.tv.core.server.UsenetSourcesConfigServer
 import com.nuvio.tv.core.server.UsenetSourcesWebPage
+import com.nuvio.tv.core.usenet.IndexerCounts
 import com.nuvio.tv.core.usenet.IndexerStatus
 import com.nuvio.tv.core.usenet.NewznabClient
+import com.nuvio.tv.core.usenet.ProviderCounts
+import com.nuvio.tv.core.usenet.StatsContent
+import com.nuvio.tv.core.usenet.StatsPeriod
+import com.nuvio.tv.core.usenet.UsenetSourceStats
 import com.nuvio.tv.core.usenet.NntpProviderTester
+import com.nuvio.tv.core.usenet.NntpProviderTuner
+import com.nuvio.tv.core.usenet.TuneOutcome
+import com.nuvio.tv.core.usenet.TuneProgress
 import com.nuvio.tv.core.usenet.ProviderTestResult
 import com.nuvio.tv.core.usenet.UsenetIndexer
 import com.nuvio.tv.core.usenet.UsenetProvider
@@ -26,12 +34,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -49,6 +60,35 @@ data class UsenetSourcesUiState(
 /** The QR code shown while a phone can edit sources; [lastSaved] names the source it saved last. */
 data class UsenetPhoneSetupUiState(val url: String, val qrCode: Bitmap, val lastSaved: String? = null)
 
+/**
+ * The tuning dialog of one provider: before [running] starts, while it measures ([progress]), and
+ * with its [outcome].
+ */
+data class ProviderTuneUi(
+    val providerId: String,
+    val providerName: String,
+    val running: Boolean = false,
+    /** The user stopped a run before it finished; nothing was measured to apply. */
+    val stopped: Boolean = false,
+    val progress: TuneProgress? = null,
+    val outcome: TuneOutcome? = null
+)
+
+/** An indexer's counts for the chosen period and content; null where it has none. */
+data class IndexerStatsUi(val counts: IndexerCounts? = null, val today: IndexerCounts? = null, val since: Long? = null)
+
+/** A provider's counts for the chosen period and content; null where it has none. */
+data class ProviderStatsUi(val counts: ProviderCounts? = null, val since: Long? = null)
+
+data class UsenetStatsUi(
+    val period: StatsPeriod = StatsPeriod.LAST_30_DAYS,
+    val content: StatsContent = StatsContent.ALL,
+    /** By indexer id. */
+    val indexers: Map<String, IndexerStatsUi> = emptyMap(),
+    /** By provider id. */
+    val providers: Map<String, ProviderStatsUi> = emptyMap()
+)
+
 @HiltViewModel
 class UsenetSourcesViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
@@ -56,19 +96,54 @@ class UsenetSourcesViewModel @Inject constructor(
     private val profiles: ProfileManager,
     private val client: NewznabClient,
     private val providerTester: NntpProviderTester,
-    private val usenetSettings: UsenetSettings
+    private val providerTuner: NntpProviderTuner,
+    private val usenetSettings: UsenetSettings,
+    private val sourceStats: UsenetSourceStats
 ) : ViewModel() {
     private val state = MutableStateFlow(UsenetSourcesUiState())
     val uiState = state.asStateFlow()
     private val phone = MutableStateFlow<UsenetPhoneSetupUiState?>(null)
     val phoneSetup = phone.asStateFlow()
     private var phoneServer: UsenetSourcesConfigServer? = null
+    private val tune = MutableStateFlow<ProviderTuneUi?>(null)
+    val providerTune = tune.asStateFlow()
+    private var tuneJob: Job? = null
 
     /** By indexer id; searches update these while settings are open. */
     val indexerStatuses: StateFlow<Map<String, IndexerStatus>> =
         combine(uiState, client.statusChanges) { ui, _ ->
             ui.configuration.indexers.associate { it.id to client.status(it) }
         }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Statistics of the configured sources; searches and playback update them while settings are open. */
+    val stats: StateFlow<UsenetStatsUi> = flow {
+        // Loaded here, off the main thread, with the chosen filters; counts held back are saved too.
+        sourceStats.load()
+        sourceStats.flush()
+        emitAll(combine(uiState, sourceStats.revision, sourceStats.period, sourceStats.content) { ui, _, period, content ->
+            UsenetStatsUi(period, content,
+                indexers = ui.configuration.indexers.associate { indexer ->
+                    indexer.id to IndexerStatsUi(sourceStats.indexer(indexer.id, period, content),
+                        sourceStats.indexerToday(indexer.id, content), sourceStats.indexerSince(indexer.id))
+                },
+                providers = ui.configuration.providers.associate { provider ->
+                    provider.id to ProviderStatsUi(sourceStats.provider(provider.id, period, content),
+                        sourceStats.providerSince(provider.id))
+                })
+        })
+    }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UsenetStatsUi())
+
+    fun setStatsPeriod(period: StatsPeriod) {
+        viewModelScope.launch(Dispatchers.IO) { sourceStats.setPeriod(period) }
+    }
+
+    fun setStatsContent(content: StatsContent) {
+        viewModelScope.launch(Dispatchers.IO) { sourceStats.setContent(content) }
+    }
+
+    fun resetStats() {
+        viewModelScope.launch(Dispatchers.IO) { sourceStats.reset() }
+    }
 
     init {
         viewModelScope.launch {
@@ -108,7 +183,51 @@ class UsenetSourcesViewModel @Inject constructor(
         return providerTester.test(provider, usenetSettings.settings.value.allowPrivateNetwork)
     }
 
-    fun startPhoneSetup() {
+    fun openTune(provider: UsenetProvider) {
+        stopTune()
+        tune.value = ProviderTuneUi(provider.id, provider.name)
+    }
+
+    /** Measures the saved provider; nothing is saved until [applyTune]. */
+    fun startTune() {
+        val current = tune.value ?: return
+        val provider = state.value.configuration.providers.find { it.id == current.providerId } ?: return closeTune()
+        val settings = usenetSettings.settings.value
+        // The engine's pipeline for the chosen profile, so the measurement matches playback.
+        val pipeline = if (settings.profile == "low-memory") 2 else 4
+        tuneJob?.cancel()
+        tune.value = current.copy(running = true, stopped = false, progress = null, outcome = null)
+        tuneJob = viewModelScope.launch {
+            val outcome = providerTuner.tune(provider, settings.allowPrivateNetwork, pipeline) { progress ->
+                tune.update { it?.takeIf { ui -> ui.running && ui.providerId == provider.id }?.copy(progress = progress) ?: it }
+            }
+            tune.update { it?.takeIf { ui -> ui.providerId == provider.id }?.copy(running = false, outcome = outcome) ?: it }
+        }
+    }
+
+    fun stopTune() {
+        tuneJob?.cancel()
+        tuneJob = null
+        tune.update { it?.copy(running = false, stopped = it.stopped || it.running) }
+    }
+
+    fun closeTune() {
+        stopTune()
+        tune.value = null
+    }
+
+    /** Saves the measured port and connection allowance to the provider. */
+    fun applyTune() {
+        val ui = tune.value ?: return
+        val result = (ui.outcome as? TuneOutcome.Success)?.result ?: return
+        val current = state.value
+        save(current.configuration.copy(providers = current.configuration.providers.map {
+            if (it.id == ui.providerId) it.copy(port = result.port, tls = result.tls, connections = result.connections) else it
+        }), current.profileId)
+        closeTune()
+    }
+
+    fun startPhoneSetup(add: String? = null) {
         val current = state.value
         if (!current.loaded) return
         val ip = DeviceIpAddress.get(context) ?: return toast(R.string.error_network_required)
@@ -122,7 +241,8 @@ class UsenetSourcesViewModel @Inject constructor(
             logo = { logo }
         ) ?: return toast(R.string.error_server_ports_unavailable)
         phoneServer = server
-        val url = "http://$ip:${server.listeningPort}/?t=${server.token}"
+        val url = "http://$ip:${server.listeningPort}/?t=${server.token}" +
+            (add?.let { "&${UsenetSourcesConfigServer.ADD_PARAM}=$it" } ?: "")
         phone.value = UsenetPhoneSetupUiState(url, QrCodeGenerator.generate(url, 512))
     }
 
@@ -134,6 +254,7 @@ class UsenetSourcesViewModel @Inject constructor(
 
     override fun onCleared() {
         stopPhoneSetup()
+        tuneJob?.cancel()
         super.onCleared()
     }
 

@@ -13,7 +13,10 @@ internal class StreamFallbackSession(
     orderedStreams: List<Stream>,
     private val maxAttempts: Int = 5,
     private val nanoTime: () -> Long = System::nanoTime,
-    private val isEnabled: () -> Boolean = { false }
+    private val isEnabled: () -> Boolean = { false },
+    /** Releases that already failed for good with these providers; trying them again only costs time. */
+    private val isUnplayable: (Stream) -> Boolean = { false },
+    private val messages: StreamFallbackMessages = StreamFallbackMessages()
 ) {
     private val selectedIsUsenet = selected.isUsenet()
     private var playbackUrl: String? = null
@@ -25,9 +28,12 @@ internal class StreamFallbackSession(
     private val failedProviders = mutableSetOf<List<String>>()
     var lastFailure: String? = null
         private set
+    /** Why the last source failed, in a few words, for the next attempt's message. */
+    var lastFailureReason: String? = null
+        private set
     val failureMessage: String?
         get() = if (preparationSpentMs >= 120_000L) {
-            "Usenet preparation time budget exhausted" + (lastFailure?.let { ": $it" } ?: "")
+            messages.budgetExhausted + (lastFailure?.let { ": $it" } ?: "")
         } else lastFailure
     var attempts: Int = 0
         private set
@@ -38,7 +44,8 @@ internal class StreamFallbackSession(
             remaining.any { eligible(it) }
 
     private fun eligible(stream: Stream) = stream.canAutoFallback() &&
-        stream.fallbackKey() !in attempted && stream.servers.orEmpty().sorted() !in failedProviders
+        stream.fallbackKey() !in attempted && stream.servers.orEmpty().sorted() !in failedProviders &&
+        !isUnplayable(stream)
 
     init {
         val key = selected.fallbackKey()
@@ -73,8 +80,14 @@ internal class StreamFallbackSession(
     fun canFallbackFrom(url: String): Boolean =
         ownsPlayback(url) && canAdvance
 
+    /** The playing source failed after it opened: the next attempt says so, not an older reason. */
+    fun playbackFailed() {
+        lastFailureReason = messages.playbackFailed
+    }
+
     private fun recordFailure(stream: Stream, error: Exception) {
-        lastFailure = error.message ?: "Usenet preparation failed"
+        lastFailure = error.message ?: messages.failed
+        lastFailureReason = messages.reason(error)
         when ((error as? UsenetPreparationException)?.scope) {
             UsenetPreparationException.Scope.ENGINE -> engineFailed = true
             UsenetPreparationException.Scope.PROVIDER -> failedProviders += stream.servers.orEmpty().sorted()
@@ -90,15 +103,23 @@ internal class StreamFallbackSession(
     suspend fun <T> prepareCandidate(stream: Stream, resolve: suspend () -> T): T {
         val allowance = minOf(120_000L - preparationSpentMs,
             if (!enabled) 120_000L else if (attempts == 0) 60_000L else 30_000L)
-        if (allowance <= 0L) error("Usenet preparation time budget exhausted")
+        if (allowance <= 0L) error(messages.budgetExhausted)
         val start = nanoTime()
+        fun elapsed() = (nanoTime() - start) / 1_000_000L
+        val label = "attempt=$attempts source=\"${stream.name}\" release=\"${stream.title?.lineSequence()?.firstOrNull()}\""
+        logPreparation("start $label allowanceMs=$allowance spentMs=$preparationSpentMs")
         try {
             val prepared = withTimeoutOrNull(allowance) { Prepared(resolve()) }
-                ?: throw UsenetPreparationException("Usenet source preparation timed out")
+                ?: throw UsenetPreparationException(messages.timedOut)
+            logPreparation("ready $label ms=${elapsed()}")
             return prepared.value
         } catch (cancelled: CancellationException) {
+            logPreparation("cancelled $label ms=${elapsed()}")
             throw cancelled
         } catch (error: Exception) {
+            val failure = (error as? UsenetPreparationException)?.failure
+            logPreparation("failed $label ms=${elapsed()} kind=${failure ?: "-"} error=${error.javaClass.simpleName}: " +
+                redacted(error.message.orEmpty()))
             recordFailure(stream, error)
             throw error
         } finally {
@@ -126,6 +147,64 @@ internal class StreamFallbackSession(
         }
     }
 }
+
+/** What a session tells the user. The defaults are the English wording, for tests without resources. */
+internal data class StreamFallbackMessages(
+    val budgetExhausted: String = "Usenet preparation time budget exhausted",
+    val timedOut: String = "Usenet source preparation timed out",
+    val failed: String = "Usenet preparation failed",
+    val playbackFailed: String = "Playback failed",
+    val tookTooLong: String = "Took too long to open",
+    /** A few words per engine failure kind (X-Usenet-Failure). */
+    val reasons: Map<String, String> = mapOf(
+        "missing-article" to "Articles missing on your providers",
+        "hole-limit" to "Too many missing articles",
+        "invalid-article" to "Damaged articles",
+        "provider-authentication" to "Provider login failed",
+        "provider-quota" to "Provider quota reached",
+        "provider" to "Provider unavailable",
+        "blank-content" to "Empty release"
+    )
+) {
+    /** The engine's kind when it sent a known one, else the first line of its message. */
+    fun reason(error: Exception): String? {
+        reasons[(error as? UsenetPreparationException)?.failure]?.let { return it }
+        val message = error.message?.lineSequence()?.firstOrNull()?.trim()
+        if (message == timedOut) return tookTooLong
+        return message?.takeIf { it.isNotEmpty() }?.let { redacted(it).take(80) }
+    }
+}
+
+internal fun streamFallbackMessages(context: android.content.Context) = StreamFallbackMessages(
+    budgetExhausted = context.getString(com.nuvio.tv.R.string.usenet_preparation_budget_exhausted),
+    timedOut = context.getString(com.nuvio.tv.R.string.usenet_preparation_timed_out),
+    failed = context.getString(com.nuvio.tv.R.string.usenet_preparation_failed),
+    playbackFailed = context.getString(com.nuvio.tv.R.string.usenet_reason_playback_failed),
+    tookTooLong = context.getString(com.nuvio.tv.R.string.usenet_reason_timed_out),
+    reasons = mapOf(
+        "missing-article" to context.getString(com.nuvio.tv.R.string.usenet_reason_missing_article),
+        "hole-limit" to context.getString(com.nuvio.tv.R.string.usenet_reason_hole_limit),
+        "invalid-article" to context.getString(com.nuvio.tv.R.string.usenet_reason_invalid_article),
+        "provider-authentication" to context.getString(com.nuvio.tv.R.string.usenet_reason_provider_authentication),
+        "provider-quota" to context.getString(com.nuvio.tv.R.string.usenet_reason_provider_quota),
+        "provider" to context.getString(com.nuvio.tv.R.string.usenet_reason_provider),
+        "blank-content" to context.getString(com.nuvio.tv.R.string.usenet_reason_blank_content)
+    )
+)
+
+/** "Trying next stream (attempt n)…", after the reason the last source failed when there is one. */
+internal fun nextStreamMessage(context: android.content.Context, attempt: Int, reason: String?): String =
+    if (reason.isNullOrBlank()) context.getString(com.nuvio.tv.R.string.player_trying_next_stream, attempt)
+    else context.getString(com.nuvio.tv.R.string.usenet_trying_next_stream_reason, reason.trimEnd('.', ' '), attempt)
+
+/** One line per Usenet source preparation, so slow or failing indexers and releases show in logcat. */
+private fun logPreparation(message: String) {
+    runCatching { android.util.Log.i("UsenetPrepare", message) }
+}
+
+/** Engine and network messages can carry URLs, whose queries hold API keys: keep only the host. */
+internal fun redacted(message: String): String =
+    message.replace(Regex("""(https?|nntps?)://(?:[^@\s/"]*@)?([^/\s"?]+)[^\s"]*"""), "$1://$2/…").take(240)
 
 private fun Stream.canAutoFallback(): Boolean =
     isUsenet() && !isExternal() && !isYouTube()

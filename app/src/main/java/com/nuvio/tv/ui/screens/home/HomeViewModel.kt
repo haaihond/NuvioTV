@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.home
 
+import android.util.Log
 import android.content.Context
 import android.os.SystemClock
 import androidx.compose.runtime.mutableStateMapOf
@@ -8,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.LocaleCache
 import com.nuvio.tv.core.player.StreamAutoPlayPolicy
 import com.nuvio.tv.core.recommendations.TvRecommendationManager
+import com.nuvio.tv.core.tracking.RewatchRunPosition
+import com.nuvio.tv.core.tmdb.MetaPreviewEnricher
 import com.nuvio.tv.core.tmdb.TmdbMetadataService
 import com.nuvio.tv.core.tmdb.TmdbService
 import com.nuvio.tv.data.local.AuthSessionNoticeDataStore
@@ -19,6 +22,7 @@ import com.nuvio.tv.data.local.MDBListSettingsDataStore
 import com.nuvio.tv.data.local.TmdbSettingsDataStore
 import com.nuvio.tv.data.local.TraktSettingsDataStore
 import com.nuvio.tv.data.local.ContinueWatchingEnrichmentCache
+import com.nuvio.tv.data.mediaserver.ServerCatalog
 import com.nuvio.tv.data.trailer.TrailerService
 import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.CatalogDescriptor
@@ -53,6 +57,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -84,7 +89,17 @@ class HomeViewModel @Inject constructor(
     internal val watchedSeriesStateHolder: com.nuvio.tv.data.local.WatchedSeriesStateHolder,
     internal val cwEnrichmentCache: ContinueWatchingEnrichmentCache,
     internal val profileManager: com.nuvio.tv.core.profile.ProfileManager,
-    internal val tvRecommendationManager: TvRecommendationManager
+    internal val tvRecommendationManager: TvRecommendationManager,
+    internal val simklSyncRepository: com.nuvio.tv.data.simkl.SimklSyncRepository,
+    internal val simklRewatchWriter: com.nuvio.tv.data.simkl.SimklRewatchWriter,
+    internal val serverCatalog: ServerCatalog,
+    internal val trailerPlayerPool: com.nuvio.tv.core.player.TrailerPlayerPool,
+    internal val backgroundTrailerController: com.nuvio.tv.core.player.BackgroundTrailerController,
+    internal val metaPreviewEnricher: MetaPreviewEnricher = MetaPreviewEnricher(
+        tmdbService,
+        tmdbMetadataService,
+        mdbListRepository
+    )
 ) : ViewModel() {
     companion object {
         internal const val TAG = "HomeViewModel"
@@ -244,6 +259,8 @@ class HomeViewModel @Inject constructor(
     internal val trailerPreviewNegativeCache = mutableSetOf<String>()
     internal val trailerPreviewUrlsState = mutableStateMapOf<String, String>()
     internal val trailerPreviewAudioUrlsState = mutableStateMapOf<String, String>()
+    internal val trailerPreviewYoutubeKeys = mutableMapOf<String, String>()
+    internal var continueTrailerInDetails = false
     internal var activeTrailerPreviewItemId: String? = null
     internal var trailerPreviewRequestVersion: Long = 0L
     internal var trailerPreviewJob: Job? = null
@@ -285,7 +302,24 @@ class HomeViewModel @Inject constructor(
     internal val discoveredOlderNextUpItems = Collections.synchronizedList(mutableListOf<ContinueWatchingItem.NextUp>())
     internal val cwLastProcessedNextUpContentIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     internal val cwProcessedOlderSeedContentIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Running rewatch cards whose close write is still in flight. */
+    internal val cwPendingRewatchCloseContentIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Runs advanced locally by a Continue Watching mark, kept over the account read until the read
+     * reports the same or a later episode. The classic mark is held by the provider's optimistic
+     * progress; a rewatch has no such provider row, so the run itself is advanced here.
+     */
+    internal val cwOptimisticRewatchRuns = MutableStateFlow<Map<String, RewatchRunPosition>>(emptyMap())
     internal val cwEnrichedNextUpOverlay = ConcurrentHashMap<String, NextUpInfo>()
+    /** Next-up overlay entries restored from the disk snapshot and not enriched yet in this session. */
+    internal val cwDiskSeededNextUpOverlayIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Next-up seed keys an earlier launch found without a next episode, with their recheck time. */
+    internal val cwNoNextUpSeeds = ConcurrentHashMap<String, Long>()
+    /** Profile whose [cwNoNextUpSeeds] are loaded; null loads them again from disk. */
+    @Volatile internal var cwNoNextUpSeedsProfileId: Int? = null
+    /** Wall clock time the last Continue Watching cycle started, to spot releases passed since. */
+    @Volatile internal var cwLastCycleStartedAtMs: Long = System.currentTimeMillis()
     /** In-memory cache of enriched InProgress items per contentId+episode key. */
     internal val cwEnrichedInProgressOverlay = ConcurrentHashMap<String, ContinueWatchingItem.InProgress>()
     /** Bumped to force the CW pipeline to re-run (e.g. after cache clear). */
@@ -337,6 +371,11 @@ class HomeViewModel @Inject constructor(
         get() = trailerPreviewAudioUrlsState
 
     init {
+        viewModelScope.launch {
+            layoutPreferenceDataStore.focusedPosterTrailerContinueInDetails.collect { enabled ->
+                continueTrailerInDetails = enabled
+            }
+        }
         // Accumulates individual watched status changes and flushes them as a single
         // update after 150ms of inactivity, preventing N separate recompositions.
         viewModelScope.launch {
@@ -359,9 +398,11 @@ class HomeViewModel @Inject constructor(
             observeLayoutPreferences()
             observeModernHomePresentation()
             loadContinueWatching()
+            observeContinueWatchingReleases()
             watchedSeriesStateHolder.loadFromDisk()
             observeExternalMetaPrefetchPreference()
             observeContinueWatchingSortMode()
+            observeRewatchRuns()
             loadHomeCatalogOrderPreference()
             loadFollowAddonsOrder()
             loadDisabledHomeCatalogPreference()
@@ -392,13 +433,18 @@ class HomeViewModel @Inject constructor(
                     cwTmdbIdCache.clear()
                     cwNextUpResolutionCache.clear()
                     cwNextUpNegativeCacheTimestamps.clear()
+                    cwNoNextUpSeeds.clear()
+                    cwNoNextUpSeedsProfileId = null
                     discoveredOlderNextUpItems.clear()
                     cwLastProcessedNextUpContentIds.clear()
                     cwProcessedOlderSeedContentIds.clear()
                     cwEnrichedNextUpOverlay.clear()
+                    cwDiskSeededNextUpOverlayIds.clear()
                     cwEnrichedInProgressOverlay.clear()
                     cwLastBadgeEpisodeKeys = emptySet()
                     cwLastShowIdSiblings = emptyMap()
+                    cwPendingRewatchCloseContentIds.clear()
+                    cwOptimisticRewatchRuns.value = emptyMap()
                     _uiState.update {
                         it.copy(layoutPreferencesReady = false, continueWatchingItems = emptyList())
                     }
@@ -446,10 +492,13 @@ class HomeViewModel @Inject constructor(
         cwTmdbIdCache.clear()
         cwNextUpResolutionCache.clear()
         cwNextUpNegativeCacheTimestamps.clear()
+        cwNoNextUpSeeds.clear()
+        cwNoNextUpSeedsProfileId = null
         discoveredOlderNextUpItems.clear()
         cwLastProcessedNextUpContentIds.clear()
         cwProcessedOlderSeedContentIds.clear()
         cwEnrichedNextUpOverlay.clear()
+        cwDiskSeededNextUpOverlayIds.clear()
         cwEnrichedInProgressOverlay.clear()
         cwLastBadgeEpisodeKeys = emptySet()
         cwLastShowIdSiblings = emptyMap()
@@ -494,6 +543,58 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Rewatches in Continue Watching: the runs decide which series the row follows, and the caches hold
+     * the answers for the previous ones per content id. A run that appears or moves (a confirmed
+     * rewatch, a sync, or the mode setting re-deriving them) has to drop those answers, or the row
+     * keeps the one it already had until the app restarts.
+     */
+    private fun observeRewatchRuns() {
+        viewModelScope.launch {
+            var previousRuns: List<RewatchRunPosition>? = null
+            simklSyncRepository.state
+                .map { state -> state.snapshot.rewatchRuns }
+                .distinctUntilChanged()
+                .collect { runs ->
+                    // Dismissals are not healed here any more: clearing every run's keys on every
+                    // emission (the first included) made a dismissal unable to keep a run card
+                    // hidden. The close path clears the keys of the one run it actually closes; the
+                    // cost is that a stale dismissal from a build that could not close a session is
+                    // no longer swept away.
+                    val previous = previousRuns
+                    previousRuns = runs
+                    if (previous == null) return@collect
+                    invalidateCwCachesForRewatchRuns(changedRewatchRunKeys(previous, runs))
+                }
+        }
+    }
+
+    /**
+     * Drops the Continue Watching answers of the series whose run changed, and leaves the others.
+     *
+     * The pipeline already watches the runs, so it rebuilds on the change. Clearing every series
+     * instead is what made the other cards fall back to their raw provider titles until enrichment
+     * ran again. A run whose mark time alone changed is not passed here: its position did not move.
+     */
+    private fun invalidateCwCachesForRewatchRuns(keys: Set<String>) {
+        if (keys.isEmpty()) return
+        // The enriched overlays stay: they are reused for the same episode only, and the series
+        // title and artwork they hold are what the card keeps while its next episode is enriched.
+        // Dropping them made the card that just moved show its raw provider title in between.
+        synchronized(cwNextUpResolutionCache) {
+            cwNextUpResolutionCache.keys.removeAll { key -> key.substringBefore('|') in keys }
+        }
+        cwNextUpNegativeCacheTimestamps.keys.removeAll { key -> key.substringBefore('|') in keys }
+        synchronized(discoveredOlderNextUpItems) {
+            discoveredOlderNextUpItems.removeAll { item -> item.info.contentId in keys }
+        }
+        cwLastProcessedNextUpContentIds.removeAll(keys)
+        cwProcessedOlderSeedContentIds.removeAll(keys)
+        // A run that disappeared can put the canonical seed back in the row, and the older-seed
+        // path skips a series whose validation deadline is still fresh. Expire only this series.
+        watchedSeriesStateHolder.clearValidationStateFor(keys)
+    }
+
     private fun observeBlurUnwatchedEpisodes() {
         viewModelScope.launch {
             layoutPreferenceDataStore.blurContinueWatchingNextUp
@@ -521,6 +622,13 @@ class HomeViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .collect { style ->
                     _uiState.update { it.copy(continueWatchingCardStyle = style) }
+                }
+        }
+        viewModelScope.launch {
+            layoutPreferenceDataStore.continueWatchingClickAction
+                .distinctUntilChanged()
+                .collect { action ->
+                    _uiState.update { it.copy(continueWatchingClickAction = action) }
                 }
         }
         viewModelScope.launch {
@@ -577,6 +685,20 @@ class HomeViewModel @Inject constructor(
     }
 
     fun requestTrailerPreview(item: MetaPreview) = requestTrailerPreviewPipeline(item)
+
+    fun beginTrailerHandoff(itemId: String) {
+        if (!continueTrailerInDetails) return
+        val videoUrl = trailerPreviewUrlsState[itemId] ?: return
+        val audioUrl = trailerPreviewAudioUrlsState[itemId]
+        val youtubeKey = trailerPreviewYoutubeKeys[itemId]
+        if (backgroundTrailerController.beginTransfer(itemId, videoUrl, audioUrl, youtubeKey)) return
+        trailerPlayerPool.beginHandoff(
+            itemId = itemId,
+            videoUrl = videoUrl,
+            audioUrl = audioUrl,
+            youtubeKey = youtubeKey
+        )
+    }
 
     fun requestTrailerPreview(
         itemId: String,
@@ -637,6 +759,7 @@ class HomeViewModel @Inject constructor(
                         // Genuine in-profile source change — clear CW caches to prevent mixing.
                         cwMetaCache.clear()
                         cwEnrichedNextUpOverlay.clear()
+                        cwDiskSeededNextUpOverlayIds.clear()
                         cwEnrichedInProgressOverlay.clear()
                         discoveredOlderNextUpItems.clear()
                         cwLastProcessedNextUpContentIds.clear()
@@ -685,6 +808,7 @@ class HomeViewModel @Inject constructor(
         when (event) {
             is HomeEvent.OnItemClick -> navigateToDetail(event.itemId, event.itemType)
             is HomeEvent.OnLoadMoreCatalog -> loadMoreCatalogItems(event.catalogId, event.addonId, event.type)
+            is HomeEvent.OnMarkContinueWatchingWatched -> markContinueWatchingWatched(event.item)
             is HomeEvent.OnRemoveContinueWatching -> removeContinueWatching(
                 contentId = event.contentId,
                 season = event.season,
@@ -726,7 +850,7 @@ class HomeViewModel @Inject constructor(
                         ),
                         episodeThumbnail = cached.episodeThumbnail,
                         episodeDescription = cached.episodeDescription,
-                        episodeImdbRating = cached.episodeImdbRating,
+                        episodeImdbRating = if (cached.ratingVisible) cached.episodeImdbRating else null,
                         genres = cached.genres,
                         releaseInfo = cached.releaseInfo
                     )
@@ -753,7 +877,7 @@ class HomeViewModel @Inject constructor(
                         hasAired = cached.hasAired,
                         airDateLabel = cached.airDateLabel,
                         lastWatched = cached.lastWatched,
-                        imdbRating = cached.imdbRating,
+                        imdbRating = if (cached.ratingVisible) cached.imdbRating else null,
                         genres = cached.genres,
                         releaseInfo = cached.releaseInfo,
                         sortTimestamp = cached.sortTimestamp,
@@ -792,6 +916,78 @@ class HomeViewModel @Inject constructor(
         episode = episode,
         isNextUp = isNextUp
     )
+
+    private fun markContinueWatchingWatched(item: ContinueWatchingItem) {
+        if (!item.canMarkWatched()) return
+        val optimisticRun = optimisticRewatchRunFor(item)
+        if (optimisticRun != null) {
+            cwOptimisticRewatchRuns.update { runs -> runs + (optimisticRun.contentId to optimisticRun) }
+            viewModelScope.launch {
+                withTimeoutOrNull(30_000) {
+                    simklSyncRepository.state.first { state ->
+                        accountCaughtUpWithOptimisticRun(state.snapshot.rewatchRuns, optimisticRun)
+                    }
+                }
+                cwOptimisticRewatchRuns.update { runs ->
+                    if (runs[optimisticRun.contentId] == optimisticRun) {
+                        runs - optimisticRun.contentId
+                    } else {
+                        runs
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching { watchProgressRepository.markAsCompleted(item.toCompletedProgress()) }
+                .onFailure { error -> Log.w(TAG, "Failed to mark continue watching item as watched", error) }
+        }
+    }
+
+    /**
+     * The run position a Continue Watching mark asks for, before the account read sees it.
+     *
+     * Only the card the run itself offered may advance the run. The classic mark is held by the
+     * provider's optimistic progress until the account catches up; a rewatch has no such provider
+     * row, so the run is advanced here by the same rule the mark follows. A flat anime session has
+     * no season, so its next step is the next number.
+     */
+    private fun optimisticRewatchRunFor(item: ContinueWatchingItem): RewatchRunPosition? {
+        val contentId = when (item) {
+            is ContinueWatchingItem.NextUp -> item.info.contentId
+            is ContinueWatchingItem.InProgress -> item.progress.contentId
+        }
+        val accountRun = simklSyncRepository.state.value.snapshot.rewatchRuns
+            .firstOrNull { candidate -> candidate.matches(contentId) } ?: return null
+        val run = cwOptimisticRewatchRuns.value[accountRun.contentId]
+            ?.takeIf { optimistic -> optimistic.isAtOrPast(accountRun) }
+            ?: accountRun
+        val markedSeason: Int?
+        val markedEpisode: Int?
+        when (item) {
+            is ContinueWatchingItem.NextUp -> {
+                if (item.info.seedSeason != run.seasonNumber || item.info.seedEpisode != run.episodeNumber) {
+                    return null
+                }
+                markedSeason = item.info.season
+                markedEpisode = item.info.episode
+            }
+            is ContinueWatchingItem.InProgress -> {
+                markedSeason = item.progress.season
+                markedEpisode = item.progress.episode
+                if (markedSeason == null || markedEpisode == null) return null
+                if (markedSeason != run.seasonNumber) return null
+                if (markedEpisode != run.episodeNumber && markedEpisode != run.episodeNumber + 1) return null
+            }
+        }
+        val nextEpisode = markedEpisode ?: return null
+        val advancedSeason = if (run.seasonNumber == 0) 0 else markedSeason ?: run.seasonNumber
+        val advancedEpisode = if (run.seasonNumber == 0) run.episodeNumber + 1 else nextEpisode
+        return run.copy(
+            seasonNumber = advancedSeason,
+            episodeNumber = advancedEpisode,
+            markedAtEpochMs = System.currentTimeMillis()
+        )
+    }
 
     private fun observeCollections() = observeCollectionsPipeline()
 

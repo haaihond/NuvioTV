@@ -31,6 +31,7 @@ import com.nuvio.tv.domain.model.mergeCatalogPage
 import com.nuvio.tv.domain.model.nextCatalogSkip
 import com.nuvio.tv.domain.model.skipStep
 import com.nuvio.tv.domain.model.supportsExtra
+import com.nuvio.tv.domain.model.isSeriesLikeType
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.WatchProgressRepository
 import com.nuvio.tv.ui.screens.home.GridItem
@@ -57,6 +58,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -67,12 +69,15 @@ data class FolderDetailUiState(
     val homeLayout: HomeLayout = HomeLayout.MODERN,
     val homeImdbRatingsVisibility: HomeImdbRatingsVisibility = HomeImdbRatingsVisibility.SHOW_ALL,
     val posterLabelsEnabled: Boolean = true,
+    val modernPosterLabelsEnabled: Boolean = false,
     val catalogAddonNameEnabled: Boolean = true,
     val catalogTypeSuffixEnabled: Boolean = true,
     val hideUnreleasedContent: Boolean = false,
     val showFullReleaseDate: Boolean = true,
     val modernLandscapePostersEnabled: Boolean = false,
     val modernHeroFullScreenBackdropEnabled: Boolean = false,
+    val alwaysShowLandscapeClearlogo: Boolean = false,
+    val heroDescriptionAutoScrollEnabled: Boolean = false,
     val focusedPosterBackdropExpandEnabled: Boolean = false,
     val focusedPosterBackdropExpandDelaySeconds: Int = 3,
     val focusedPosterBackdropTrailerEnabled: Boolean = false,
@@ -108,6 +113,8 @@ data class FolderDetailGridFocusState(
     val hasSavedFocus: Boolean = false
 )
 
+private const val TRAILER_PREVIEW_DEBOUNCE_MS = 180L
+
 @HiltViewModel
 class FolderDetailViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
@@ -127,6 +134,8 @@ class FolderDetailViewModel @Inject constructor(
     private val trailerService: TrailerService,
     private val tmdbCollectionSourceResolver: TmdbCollectionSourceResolver,
     private val traktPublicListSourceResolver: TraktPublicListSourceResolver,
+    private val trailerPlayerPool: com.nuvio.tv.core.player.TrailerPlayerPool,
+    private val backgroundTrailerController: com.nuvio.tv.core.player.BackgroundTrailerController,
     val posterOptions: com.nuvio.tv.ui.components.posteroptions.PosterOptionsController
 ) : ViewModel() {
 
@@ -150,9 +159,12 @@ class FolderDetailViewModel @Inject constructor(
     val trailerPreviewAudioUrls: StateFlow<Map<String, String>> = _trailerPreviewAudioUrls.asStateFlow()
     private val trailerPreviewLoadingIds = mutableSetOf<String>()
     private val trailerPreviewNegativeCache = mutableSetOf<String>()
+    private val trailerPreviewYoutubeKeys = mutableMapOf<String, String>()
+    private var continueTrailerInDetails = false
     private val modernCarouselRowBuildCache = ModernCarouselRowBuildCache()
     private var activeTrailerPreviewItemId: String? = null
     private var trailerPreviewRequestVersion: Long = 0L
+    private var trailerPreviewJob: Job? = null
 
     /** Items for which enrichment was attempted but produced no enriched data. */
     private val _failedEnrichmentIds = MutableStateFlow<Set<String>>(emptySet())
@@ -189,6 +201,11 @@ class FolderDetailViewModel @Inject constructor(
         viewModelScope.launch {
             mdbListSettingsDataStore.settings.distinctUntilChanged().collect { currentMdbListSettings = it }
         }
+        viewModelScope.launch {
+            layoutPreferenceDataStore.focusedPosterTrailerContinueInDetails.collect { enabled ->
+                continueTrailerInDetails = enabled
+            }
+        }
     }
 
     private fun observeWatchedStatusCombined() {
@@ -205,9 +222,8 @@ class FolderDetailViewModel @Inject constructor(
                 allItems.forEach { item ->
                     val key = com.nuvio.tv.ui.screens.home.homeItemStatusKey(item.id, item.apiType)
                     val isWatched = when (item.apiType) {
-                        "movie" -> item.id in movieWatchedIds
                         "series", "tv" -> item.id in seriesWatchedIds
-                        else -> false
+                        else -> !isSeriesLikeType(item.apiType) && item.id in movieWatchedIds
                     }
                     newStatus[key] = isWatched
                 }
@@ -248,12 +264,15 @@ class FolderDetailViewModel @Inject constructor(
             val homeLayout = layoutPreferenceDataStore.selectedLayout.first()
             val homeImdbRatingsVisibility = layoutPreferenceDataStore.homeImdbRatingsVisibility.first()
             val posterLabelsEnabled = layoutPreferenceDataStore.posterLabelsEnabled.first()
+            val modernPosterLabelsEnabled = layoutPreferenceDataStore.modernPosterLabelsEnabled.first()
             val catalogAddonNameEnabled = layoutPreferenceDataStore.catalogAddonNameEnabled.first()
             val catalogTypeSuffixEnabled = layoutPreferenceDataStore.catalogTypeSuffixEnabled.first()
             val hideUnreleasedContent = layoutPreferenceDataStore.hideUnreleasedContent.first()
             val showFullReleaseDate = layoutPreferenceDataStore.showFullReleaseDate.first()
             val modernLandscapePosters = layoutPreferenceDataStore.modernLandscapePostersEnabled.first()
             val modernFullScreenBackdrop = layoutPreferenceDataStore.modernHeroFullScreenBackdropEnabled.first()
+            val alwaysShowLandscapeClearlogo = layoutPreferenceDataStore.alwaysShowLandscapeClearlogo.first()
+            val heroDescriptionAutoScrollEnabled = layoutPreferenceDataStore.heroDescriptionAutoScrollEnabled.first()
             val focusedPosterBackdropExpandEnabled = layoutPreferenceDataStore.focusedPosterBackdropExpandEnabled.first()
             val focusedPosterBackdropExpandDelaySeconds = layoutPreferenceDataStore.focusedPosterBackdropExpandDelaySeconds.first()
             val focusedPosterBackdropTrailerEnabled = layoutPreferenceDataStore.focusedPosterBackdropTrailerEnabled.first()
@@ -347,12 +366,15 @@ class FolderDetailViewModel @Inject constructor(
                     homeLayout = homeLayout,
                     homeImdbRatingsVisibility = homeImdbRatingsVisibility,
                     posterLabelsEnabled = posterLabelsEnabled,
+                    modernPosterLabelsEnabled = modernPosterLabelsEnabled,
                     catalogAddonNameEnabled = catalogAddonNameEnabled,
                     catalogTypeSuffixEnabled = catalogTypeSuffixEnabled,
                     hideUnreleasedContent = hideUnreleasedContent,
                     showFullReleaseDate = showFullReleaseDate,
                     modernLandscapePostersEnabled = modernLandscapePosters,
                     modernHeroFullScreenBackdropEnabled = modernFullScreenBackdrop,
+                    alwaysShowLandscapeClearlogo = alwaysShowLandscapeClearlogo,
+                    heroDescriptionAutoScrollEnabled = heroDescriptionAutoScrollEnabled,
                     focusedPosterBackdropExpandEnabled = focusedPosterBackdropExpandEnabled,
                     focusedPosterBackdropExpandDelaySeconds = focusedPosterBackdropExpandDelaySeconds,
                     focusedPosterBackdropTrailerEnabled = focusedPosterBackdropTrailerEnabled &&
@@ -562,9 +584,11 @@ class FolderDetailViewModel @Inject constructor(
                         isLoading = anyLoading,
                         homeLayout = s.homeLayout,
                         homeImdbRatingsVisibility = s.homeImdbRatingsVisibility,
-                        posterLabelsEnabled = if (s.homeLayout == HomeLayout.MODERN) false else s.posterLabelsEnabled,
+                        posterLabelsEnabled = if (s.homeLayout == HomeLayout.MODERN) s.modernPosterLabelsEnabled else s.posterLabelsEnabled,
                         modernLandscapePostersEnabled = s.modernLandscapePostersEnabled,
                         modernHeroFullScreenBackdropEnabled = s.modernHeroFullScreenBackdropEnabled,
+                        alwaysShowLandscapeClearlogo = s.alwaysShowLandscapeClearlogo,
+                        heroDescriptionAutoScrollEnabled = s.heroDescriptionAutoScrollEnabled,
                         catalogAddonNameEnabled = s.catalogAddonNameEnabled,
                         catalogTypeSuffixEnabled = s.catalogTypeSuffixEnabled,
                         focusedPosterBackdropExpandEnabled = s.focusedPosterBackdropExpandEnabled,
@@ -601,6 +625,8 @@ class FolderDetailViewModel @Inject constructor(
                     posterLabelsEnabled = s.posterLabelsEnabled,
                     modernLandscapePostersEnabled = s.modernLandscapePostersEnabled,
                     modernHeroFullScreenBackdropEnabled = s.modernHeroFullScreenBackdropEnabled,
+                    alwaysShowLandscapeClearlogo = s.alwaysShowLandscapeClearlogo,
+                    heroDescriptionAutoScrollEnabled = s.heroDescriptionAutoScrollEnabled,
                     catalogAddonNameEnabled = s.catalogAddonNameEnabled,
                     catalogTypeSuffixEnabled = s.catalogTypeSuffixEnabled,
                     focusedPosterBackdropExpandEnabled = s.focusedPosterBackdropExpandEnabled,
@@ -1445,52 +1471,79 @@ class FolderDetailViewModel @Inject constructor(
         if (!trailerPreviewLoadingIds.add(itemId)) return
 
         val requestVersion = trailerPreviewRequestVersion
-        viewModelScope.launch {
-            val tmdbId = runCatching { tmdbService.ensureTmdbId(itemId, apiType) }.getOrNull()
-            val trailerSource = trailerService.getTrailerPlaybackSource(
-                title = title,
-                year = extractYear(releaseInfo),
-                tmdbId = tmdbId,
-                type = apiType
-            )
+        // Only the focused item's lookup is kept. Scrolling through a row used to start a
+        // full YouTube extraction for every poster it passed, all running at once.
+        trailerPreviewJob?.cancel()
+        trailerPreviewJob = viewModelScope.launch {
+            try {
+                // Wait for focus to settle before hitting the network, as the home screen does.
+                delay(TRAILER_PREVIEW_DEBOUNCE_MS)
+                if (trailerPreviewRequestVersion != requestVersion) return@launch
 
-            val isLatestFocusedItem =
-                activeTrailerPreviewItemId == itemId && trailerPreviewRequestVersion == requestVersion
-            if (!isLatestFocusedItem) {
-                trailerPreviewLoadingIds.remove(itemId)
-                return@launch
-            }
-
-            // Prefer the localized YT id provided by the caller (typically TMDB
-            // enrichment trailers in the user locale) when the direct TMDB videos
-            // lookup didn't find anything for this language and we'd otherwise
-            // fall through to TMDB's en-US fallback.
-            val resolvedSource = if (trailerSource?.videoUrl.isNullOrBlank() && !fallbackYtId.isNullOrBlank()) {
-                trailerService.getTrailerPlaybackSourceFromYouTubeUrl(
-                    youtubeUrl = "https://www.youtube.com/watch?v=$fallbackYtId",
+                val tmdbId = runCatching { tmdbService.ensureTmdbId(itemId, apiType) }.getOrNull()
+                val trailerSource = trailerService.getTrailerPlaybackSource(
                     title = title,
-                    year = extractYear(releaseInfo)
+                    year = extractYear(releaseInfo),
+                    tmdbId = tmdbId,
+                    type = apiType
                 )
-            } else {
-                trailerSource
-            }
 
-            if (resolvedSource?.videoUrl.isNullOrBlank()) {
-                trailerPreviewNegativeCache.add(itemId)
-                _trailerPreviewUrls.update { it - itemId }
-                _trailerPreviewAudioUrls.update { it - itemId }
-            } else {
-                _trailerPreviewUrls.update { it + (itemId to resolvedSource.videoUrl) }
-                val audioUrl = resolvedSource.audioUrl
-                if (audioUrl.isNullOrBlank()) {
-                    _trailerPreviewAudioUrls.update { it - itemId }
+                val isLatestFocusedItem =
+                    activeTrailerPreviewItemId == itemId && trailerPreviewRequestVersion == requestVersion
+                if (!isLatestFocusedItem) return@launch
+
+                // Prefer the localized YT id provided by the caller (typically TMDB
+                // enrichment trailers in the user locale) when the direct TMDB videos
+                // lookup didn't find anything for this language and we'd otherwise
+                // fall through to TMDB's en-US fallback.
+                val resolvedSource = if (trailerSource?.videoUrl.isNullOrBlank() && !fallbackYtId.isNullOrBlank()) {
+                    trailerService.getTrailerPlaybackSourceFromYouTubeUrl(
+                        youtubeUrl = "https://www.youtube.com/watch?v=$fallbackYtId",
+                        title = title,
+                        year = extractYear(releaseInfo)
+                    )
                 } else {
-                    _trailerPreviewAudioUrls.update { it + (itemId to audioUrl) }
+                    trailerSource
                 }
-            }
 
-            trailerPreviewLoadingIds.remove(itemId)
+                if (resolvedSource?.videoUrl.isNullOrBlank()) {
+                    // While YouTube is rate limiting, a miss isn't remembered, so the
+                    // trailer comes back on a later focus once the pause is over.
+                    if (!trailerService.isRateLimited()) {
+                        trailerPreviewNegativeCache.add(itemId)
+                    }
+                    _trailerPreviewUrls.update { it - itemId }
+                    _trailerPreviewAudioUrls.update { it - itemId }
+                    trailerPreviewYoutubeKeys.remove(itemId)
+                } else {
+                    _trailerPreviewUrls.update { it + (itemId to resolvedSource.videoUrl) }
+                    resolvedSource.youtubeKey?.let { trailerPreviewYoutubeKeys[itemId] = it }
+                        ?: trailerPreviewYoutubeKeys.remove(itemId)
+                    val audioUrl = resolvedSource.audioUrl
+                    if (audioUrl.isNullOrBlank()) {
+                        _trailerPreviewAudioUrls.update { it - itemId }
+                    } else {
+                        _trailerPreviewAudioUrls.update { it + (itemId to audioUrl) }
+                    }
+                }
+            } finally {
+                trailerPreviewLoadingIds.remove(itemId)
+            }
         }
+    }
+
+    fun beginTrailerHandoff(itemId: String) {
+        if (!continueTrailerInDetails) return
+        val videoUrl = _trailerPreviewUrls.value[itemId] ?: return
+        val audioUrl = _trailerPreviewAudioUrls.value[itemId]
+        val youtubeKey = trailerPreviewYoutubeKeys[itemId]
+        if (backgroundTrailerController.beginTransfer(itemId, videoUrl, audioUrl, youtubeKey)) return
+        trailerPlayerPool.beginHandoff(
+            itemId = itemId,
+            videoUrl = videoUrl,
+            audioUrl = audioUrl,
+            youtubeKey = youtubeKey
+        )
     }
 
     private fun extractYear(releaseInfo: String?): String? {

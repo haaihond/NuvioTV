@@ -66,6 +66,22 @@ class StreamFallbackSessionTest {
         assertEquals("Engine missing", session.failureMessage)
     }
 
+    @Test fun `the next attempt says why the last source failed`() = runTest {
+        val first = stream("first")
+        val session = session(first, listOf(first) + (1..5).map { stream("$it") })
+        suspend fun fail(error: Exception) {
+            try { session.prepareCandidate(first) { throw error } } catch (_: Exception) { }
+        }
+        fail(UsenetPreparationException("article not found", failure = "missing-article"))
+        assertEquals("Articles missing on your providers", session.lastFailureReason)
+        fail(UsenetPreparationException("missing RAR continuation at https://indexer.test/api?apikey=secret\nmore"))
+        assertEquals("missing RAR continuation at https://indexer.test/…", session.lastFailureReason)
+        try { session.prepareCandidate(first) { delay(200_000); first } } catch (_: Exception) { }
+        assertEquals("Took too long to open", session.lastFailureReason)
+        session.playbackFailed()
+        assertEquals("Playback failed", session.lastFailureReason)
+    }
+
     private fun stream(id: String) = Stream(
         name = id, title = null, description = null, url = null, nzbUrl = "https://example.test/$id.nzb",
         ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
@@ -74,6 +90,16 @@ class StreamFallbackSessionTest {
 
     private fun session(selected: Stream, streams: List<Stream>, maxAttempts: Int = 5) =
         StreamFallbackSession(selected, streams, maxAttempts, isEnabled = { true })
+
+    @Test fun `fallback skips releases that already failed for good`() = runTest {
+        val first = stream("first")
+        val dead = stream("dead")
+        val next = stream("next")
+        val session = StreamFallbackSession(first, listOf(first, dead, next), isEnabled = { true },
+            isUnplayable = { it == dead })
+        assertEquals(next, session.next())
+        assertEquals(1, session.attempts)
+    }
 
     @Test fun `fallback is disabled by default`() = runTest {
         val first = stream("first")

@@ -39,6 +39,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -49,6 +50,7 @@ import com.nuvio.tv.ui.components.LoadingIndicator
 import com.nuvio.tv.ui.components.TrailerPlayer
 import kotlinx.coroutines.delay
 import android.view.KeyEvent
+import com.nuvio.tv.ui.screens.ambient.AmbientDialogEffect
 
 @Stable
 class TrailerSeekOverlayState {
@@ -95,12 +97,18 @@ fun SharedTrailerOverlay(
             decorFitsSystemWindows = false
         )
     ) {
+        AmbientDialogEffect(onDismiss)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
                 .focusRequester(overlayFocusRequester)
                 .focusable()
+                // This surface exists only to capture remote keys (back/play/pause/seek) and has no
+                // label of its own, so merge the overlay's own text (title + "press back" hint)
+                // into it. Merging leaves exactly one named node on the overlay; a bare
+                // contentDescription here would leave those texts as separate named siblings.
+                .semantics(mergeDescendants = true) { }
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) {
                         return@onPreviewKeyEvent false

@@ -1,3 +1,4 @@
-/third_party/rapidyenc/librapidyenc_android_*.a
-/build/
-*.exe
+/prebuilt/*/*.so
+/prebuilt/*/*.part
+__pycache__/
+*.pyc

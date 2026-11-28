@@ -1,5 +1,6 @@
 <resources>
-    <string name="usenet_title">Usenet streaming</string>
+    <string name="usenet_title">Usenet</string>
+    <string name="stream_test_local_stream">The last stream was served from this device and closed with its playback, so there is no server to test.</string>
     <string name="usenet_hole_filling">Fill Missing Articles</string>
     <string name="usenet_hole_filling_description">Try to continue through small gaps in a damaged video. Missing content may cause picture or audio glitches, and some videos may still fail. Off by default. Applies to the next stream.</string>
     <string name="usenet_max_missing_articles">Maximum Missing Articles</string>
@@ -85,4 +86,39 @@
     <string name="usenet_throughput">High throughput</string>
     <string name="usenet_opening">Opening Usenet stream…</string>
     <string name="usenet_failed">Usenet stream could not be opened</string>
+    <string name="usenet_engine_missing">Usenet engine is missing for this device\'s CPU</string>
+    <string name="usenet_engine_start_failed">Usenet engine could not start</string>
+    <string name="usenet_engine_connection_failed">Usenet engine connection failed</string>
+    <string name="usenet_engine_http_error">Usenet engine returned HTTP %1$d</string>
+    <string name="usenet_engine_interrupted">Usenet engine response was interrupted</string>
+    <string name="usenet_preparation_budget_exhausted">Usenet preparation time budget exhausted</string>
+    <string name="usenet_preparation_timed_out">Usenet source preparation timed out</string>
+    <string name="usenet_preparation_failed">Usenet preparation failed</string>
+    <string name="usenet_trying_next_stream_reason">%1$s. Trying next stream (attempt %2$d)…</string>
+    <string name="usenet_reason_missing_article">Articles missing on your providers</string>
+    <string name="usenet_reason_hole_limit">Too many missing articles</string>
+    <string name="usenet_reason_invalid_article">Damaged articles</string>
+    <string name="usenet_reason_provider_authentication">Provider login failed</string>
+    <string name="usenet_reason_provider_quota">Provider quota reached</string>
+    <string name="usenet_reason_provider">Provider unavailable</string>
+    <string name="usenet_reason_blank_content">Empty release</string>
+    <string name="usenet_reason_timed_out">Took too long to open</string>
+    <string name="usenet_reason_playback_failed">Playback failed</string>
+    <!-- Error screen, after the HTTP status line, for a stream the Usenet engine gave up on. -->
+    <string name="player_error_usenet_missing_parts">\n\nThis release is missing parts on your Usenet provider (removed or incomplete upload). Try a different release.</string>
+    <string name="player_error_usenet_damaged_parts">\n\nParts of this release are damaged on your Usenet provider, or packed in a way that cannot be streamed. Try a different release.</string>
+    <string name="player_error_usenet_provider_login">\n\nYour Usenet provider refused the login. Check the provider\'s username and password in the Usenet settings.</string>
+    <string name="player_error_usenet_provider_quota">\n\nYour Usenet provider\'s download quota is used up. Check your account with the provider.</string>
+    <string name="player_error_usenet_empty_release">\n\nThis release has no real video in it. Try a different release.</string>
+    <string name="usenet_indexer_search_paused">%1$s: indexer limit reached, paused until %2$s.</string>
+    <string name="usenet_indexer_search_failed">%1$s: indexer search failed. Check the API URL, key and limits.</string>
+    <string name="usenet_size_season_share">%1$s whole season (~%2$s per episode)</string>
+    <string name="usenet_size_pack_share">%1$s whole pack (~%2$s per episode)</string>
+    <string name="usenet_size_season">%1$s (whole season)</string>
+    <string name="usenet_size_pack">%1$s (whole pack)</string>
+    <string name="usenet_badge_unavailable">UNAVAILABLE</string>
+    <string name="usenet_badge_available">AVAILABLE</string>
+    <string name="usenet_badge_season_pack">SEASON PACK</string>
+    <string name="usenet_badge_episode_failed">E%1$02d FAILED</string>
+    <string name="usenet_badge_episode_played">E%1$02d PLAYED</string>
 </resources>

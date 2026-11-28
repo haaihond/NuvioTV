@@ -9,6 +9,76 @@ import org.junit.Test
 class NewznabProtocolTest {
     private val indexer = UsenetIndexer(id = "one", name = "Indexer", apiUrl = "https://indexer.test/api?custom=value", apiKey = "secret &+key")
 
+    @Test fun `season packs are told from episodes`() {
+        assertEquals(listOf(1), NewznabProtocol.packSeasons("Slow.Horses.S01.1080p.ATVP.WEB-DL-NTb"))
+        assertEquals(listOf(2), NewznabProtocol.packSeasons("Show Season 2 Complete 2160p"))
+        assertEquals(listOf(1, 2, 3), NewznabProtocol.packSeasons("Show.S01-S03.1080p"))
+        assertEquals(listOf(1, 2, 3), NewznabProtocol.packSeasons("Show.S01-03.1080p"))
+        assertEquals(listOf(1, 2, 3), NewznabProtocol.packSeasons("Show Season 1-3 1080p"))
+        assertEquals(listOf(1, 3), NewznabProtocol.packSeasons("Show.S01.S03.1080p"))
+        assertEquals(listOf(2), NewznabProtocol.packSeasons("Show.S02-720p"))
+        assertTrue(NewznabProtocol.packSeasons("Slow.Horses.S01E03.1080p").isEmpty())
+        assertTrue(NewznabProtocol.packSeasons("Show.1x03.720p").isEmpty())
+        assertTrue(NewznabProtocol.packSeasons("Movie.2020.2160p").isEmpty())
+    }
+
+    @Test fun `a single-season pack is filtered and sorted by its size per episode`() {
+        val gb = 1L shl 30
+        val pack = UsenetRelease("Show.S01.1080p-GRP", "https://a/pack", size = 9 * gb, indexerId = "one")
+        val episode = UsenetRelease("Show.S01E02.1080p-GRP", "https://a/ep", size = 2 * gb, indexerId = "one")
+        val config = UsenetSourceConfiguration(indexers = listOf(indexer), maxSizeGb = 5, sort = UsenetSort.LARGEST)
+        // Without an episode count the pack is its whole size: over the limit.
+        assertEquals(listOf(episode), NewznabProtocol.arrange(listOf(pack, episode), config))
+        // Nine episodes: 1 GB each, under the limit and smaller than the 2 GB episode.
+        assertEquals(listOf(episode, pack), NewznabProtocol.arrange(listOf(pack, episode), config, seasonEpisodes = mapOf(1 to 9)))
+        assertEquals(listOf(pack, episode),
+            NewznabProtocol.arrange(listOf(pack, episode), config.copy(sort = UsenetSort.SMALLEST), seasonEpisodes = mapOf(1 to 9)))
+    }
+
+    @Test fun `a pack of several seasons is found for each of them and sized by all their episodes`() {
+        val gb = 1L shl 30
+        val pack = UsenetRelease("Show.S01-S03.1080p-GRP", "https://a/pack", size = 34 * gb, indexerId = "one")
+        assertEquals(gb, pack.episodeSize(mapOf(1 to 10, 2 to 12, 3 to 12)))
+        // A season without a count leaves the whole size.
+        assertEquals(34 * gb, pack.episodeSize(mapOf(1 to 10, 2 to 12)))
+        assertEquals(34 * gb, pack.episodeSize(null))
+
+        fun holds(release: String, season: Int) = NewznabProtocol.matches(UsenetRelease(release, "url"),
+            UsenetSearchRequest(imdbId = "tt1", series = true, season = season, episode = 1), idSearch = true, requireNumbering = true)
+        assertTrue(holds(pack.title, 2))
+        assertFalse(holds(pack.title, 4))
+        assertTrue(holds("Show.S01-10.1080p", 9))
+        assertTrue(holds("Show Season 1-10 1080p", 9))
+        // Listed seasons are no range, and a resolution after a hyphen is no season.
+        assertTrue(holds("Show.S01.S03.1080p", 3))
+        assertFalse(holds("Show.S01.S03.1080p", 2))
+        assertTrue(holds("Show.S02-720p", 2))
+        assertFalse(holds("Show.S02-720p", 720))
+    }
+
+    @Test fun `the result limit never cuts a release ranked first`() {
+        val releases = (1..5).map { UsenetRelease("Movie.2020.2160p-G$it", "https://a/$it", size = it.toLong(), indexerId = "one") } +
+            UsenetRelease("Movie.2020.720p-OK", "https://a/ok", indexerId = "one")
+        val config = UsenetSourceConfiguration(indexers = listOf(indexer), maxResults = 3)
+        // Best resolution first would cut the 720p release; ranked first, it stays and leads.
+        val kept = NewznabProtocol.arrange(releases, config) { if (it.title.endsWith("OK")) 0 else 1 }
+        assertEquals(listOf("Movie.2020.720p-OK", "Movie.2020.2160p-G5", "Movie.2020.2160p-G4"), kept.map { it.title })
+    }
+
+    @Test fun `the result limit lists up to 500 or every result, read from more than are listed`() {
+        val unlimited = UsenetSourceConfiguration(indexers = listOf(indexer), maxResults = UsenetSourceConfiguration.UNLIMITED_RESULTS,
+            indexerResultsLimit = UsenetSourceConfiguration.AUTO_INDEXER_RESULTS)
+        assertEquals(200, unlimited.copy(maxResults = 50).indexerResults)
+        assertEquals(500, unlimited.copy(maxResults = 500).indexerResults)
+        assertEquals(1000, unlimited.indexerResults)
+        val releases = (1..600).map { UsenetRelease("Movie.2020.1080p-G$it", "https://a/$it", size = it.toLong(), indexerId = "one") }
+        assertEquals(600, NewznabProtocol.arrange(releases, unlimited).size)
+        assertEquals(500, NewznabProtocol.arrange(releases, unlimited.copy(maxResults = 500)).size)
+        unlimited.validate()
+        unlimited.copy(maxResults = 500).validate()
+        assertThrows(IllegalArgumentException::class.java) { unlimited.copy(maxResults = 501).validate() }
+    }
+
     @Test fun `provider credentials are encoded once and IPv6 is preserved`() {
         val provider = UsenetProvider(name = "News", host = "2001:db8::1", username = "a@b", password = "a:+ %/", connections = 30)
         provider.validate()
@@ -60,6 +130,31 @@ class NewznabProtocolTest {
         val obfuscated = UsenetRelease("a8f3k2b9", "url")
         assertTrue(NewznabProtocol.matches(obfuscated, episode, idSearch = true))
         assertFalse(NewznabProtocol.matches(obfuscated, episode, idSearch = true, requireNumbering = true))
+    }
+
+    @Test fun `episode names that tell the time number no other episode`() {
+        fun names(release: String, episode: Int) = NewznabProtocol.matches(UsenetRelease(release, "url"),
+            UsenetSearchRequest(imdbId = "tt1", series = true, season = 1, episode = episode), idSearch = true)
+        val e02 = "The.Pitt.2025-S01E02-8-00.A.M.WEB-DL-2160p.DV.HDR10.EAC3.Atmos5.1.EN+FR.x265.-FRESH"
+        val e08 = "The.Pitt.2025-S01E08-2-00.P.M.WEB-DL-2160p.DV.HDR10.EAC3.Atmos5.1.EN+FR.x265.-FRESH"
+        assertTrue(names(e02, 2))
+        assertFalse(names(e02, 5)) // Not E02 to E08.
+        assertTrue(names(e08, 8))
+        assertFalse(names(e08, 2)) // Not E08 to E02.
+        val e04 = "The.Pitt.2025-S01E04-10-00.A.M.WEB-DL-2160p.DV.HDR10.EAC3.Atmos5.1.EN+FR.x265.-FRESH"
+        assertTrue(names(e04, 4))
+        assertFalse(names(e04, 5)) // Not E04 to E10: ten o'clock.
+        assertFalse(names(e04, 10))
+        // Ranges and lists still span and list their episodes.
+        assertTrue(names("Show.S01E01-03.1080p", 2))
+        assertTrue(names("Show.S01E01-E03.1080p", 2))
+        assertTrue(names("Show.S01E9-10.1080p", 10))
+        assertTrue(names("Show.S01E01E02.1080p", 2))
+        assertFalse(names("Show.S01E01E03.1080p", 2))
+        // These times are an episode's name: its upload's other episodes still share its key.
+        assertEquals(NewznabProtocol.episodeTemplate(e02.lowercase())?.first,
+            NewznabProtocol.episodeTemplate(e08.lowercase())?.first)
+        assertEquals(8, NewznabProtocol.episodeTemplate(e08)?.second)
     }
 
     @Test fun `capabilities select tmdb searches and respect disabled search types`() {
@@ -183,6 +278,97 @@ class NewznabProtocolTest {
         assertEquals("Good.1080p", NewznabProtocol.arrange(releases, config.copy(sort = UsenetSort.SMALLEST), now).first().title)
     }
 
+    @Test fun `id search results whose name gives another year are another film`() {
+        val stone = UsenetSearchRequest(imdbId = "tt0241527", title = "Harry Potter and the Sorcerer's Stone", year = 2001)
+        fun byId(release: String, request: UsenetSearchRequest = stone) =
+            NewznabProtocol.matches(UsenetRelease(release, "url"), request, idSearch = true)
+        // An indexer filed Deathly Hallows Part 2 under the 2001 film.
+        assertFalse(byId("Harry.Potter.und.die.Heiligtuemer.des.Todes.Teil.2.2011.German.DL.2160p.HDR.BluRay.AV1-Bi0hazard"))
+        assertTrue(byId("Harry.Potter.and.the.Sorcerers.Stone.2001.2160p.UHD.BluRay.x265"))
+        assertTrue(byId("Harry.Potter.und.der.Stein.der.Weisen.2002.German.1080p")) // Off by one.
+        assertTrue(byId("d-pate-1080p")) // No year: the ID is trusted.
+        assertTrue(byId("Blade.Runner.2049.2017.2160p", UsenetSearchRequest(imdbId = "tt1856101", title = "Blade Runner 2049", year = 2017)))
+        assertTrue(byId("Blade.Runner.2049.1080p", UsenetSearchRequest(imdbId = "tt1856101", title = "Blade Runner 2049", year = 2017)))
+        // Series carry season years; only movies are checked.
+        assertTrue(NewznabProtocol.matches(UsenetRelease("Show.S01E01.1999.1080p", "url"),
+            UsenetSearchRequest(imdbId = "tt1", series = true, season = 1, episode = 1, year = 2010), idSearch = true))
+    }
+
+    @Test fun `id search results named after another film of the same year are another film`() {
+        // Some of the names TMDB lists for the film, in other languages among them.
+        val towers = UsenetSearchRequest(imdbId = "tt0167261", title = "The Lord of the Rings: The Two Towers", year = 2002,
+            otherTitles = listOf("Der Herr der Ringe - Die zwei Türme", "Il Signore degli Anelli - Le due torri",
+                "LOTR2 - The Two Towers", "In de ban van de ring: De twee torens", "ロード・オブ・ザ・リング／二つの塔", "Властелин колец 2"))
+        fun kept(movie: UsenetSearchRequest, vararg releases: String) =
+            NewznabProtocol.idResultsOf(movie, releases.map { UsenetRelease(it, it) }).map { it.title }
+        // An indexer filed The Ring (2002) under the film.
+        assertEquals(emptyList<String>(), kept(towers, "The.Ring.2002.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.DTS-HD.MA.5.1-TRiToN",
+            "The Ring 2002 1080p PCOK WEB-DL DDP 5 1 H 264-PiRaTeS", "The.Ring.2002.MULTi.COMPLETE.BLURAY-OLDHAM"))
+        val named = arrayOf(
+            "The.Lord.of.the.Rings.The.Two.Towers.2002.Extended.2160p.UHD.BluRay.x265",
+            "The Lord of the Rings-The Two Towers 2002 2160p 35mm HDR v1.1",
+            "Lord.of.the.Rings.Two.Towers.2002.1080p.BluRay.x264", // Articles left out.
+            "LOTR The Two Towers 2002 1080p BluRay", // Shortened.
+            "The Lord of thee Rings The Two Towers 2002 720p", // Misspelled.
+            "Der.Herr.der.Ringe.Die.zwei.Tuerme.2002.German.DL.1080p", // Translated.
+            "Der Herr der Ringe II Die zwei Tuerme 2002 German 1080p",
+            "Il.Signore.degli.Anelli.Le.Due.Torri.2002.iTALiAN.1080p",
+            "{ Der.Herr.der.Ringe.die.zwei.Tuerme.2002.German.AC3.DVDRiP.XViD } }ghost-of-usenet.org{",
+            "a8f3c1e9d2b7", "d-pate-1080p") // No year, as obfuscated names: the ID is trusted.
+        assertEquals(named.toList(), kept(towers, *named))
+        // The year still judges a name of the film's.
+        assertEquals(emptyList<String>(), kept(towers, "The.Lord.of.the.Rings.The.Two.Towers.2012.1080p"))
+        // Unknown names leave the title unjudged.
+        assertEquals(listOf("The.Ring.2002.1080p"), kept(towers.copy(otherTitles = null), "The.Ring.2002.1080p"))
+
+        // Posts that lost a title's accented letters, a subtitle after the title, year-like titles.
+        val amelie = UsenetSearchRequest(title = "Amélie", originalTitle = "Le Fabuleux Destin d'Amélie Poulain", year = 2001, otherTitles = emptyList())
+        assertEquals(listOf("Amlie.2001.DVDRiP.XviD", "Le.Fabuleux.Destin.D.Amelie.Poulain.2001.1080p"),
+            kept(amelie, "Amlie.2001.DVDRiP.XviD", "Le.Fabuleux.Destin.D.Amelie.Poulain.2001.1080p", "Soul.Assassin.2001.WEBRip.x264"))
+        val starWars = UsenetSearchRequest(title = "Star Wars", year = 1977, otherTitles = emptyList())
+        assertEquals(listOf("Star.Wars.Episode.IV.A.New.Hope.1977.1080p"),
+            kept(starWars, "Star.Wars.Episode.IV.A.New.Hope.1977.1080p", "Scum.1977.1080p.BluRay.x264-GHOULS"))
+        assertEquals(listOf("Blade.Runner.2049.2017.2160p", "1917.2019.1080p"), kept(
+            UsenetSearchRequest(title = "Blade Runner 2049", year = 2017, otherTitles = emptyList()), "Blade.Runner.2049.2017.2160p") +
+            kept(UsenetSearchRequest(title = "1917", year = 2019, otherTitles = emptyList()), "1917.2019.1080p"))
+    }
+
+    @Test fun `full disc releases are recognised and hidden unless allowed`() {
+        listOf("The.Drama.2026.COMPLETE.UHD.BLURAY-GRP", "Movie.2020.Complete.Bluray-GRP", "Movie 2020 BD50",
+            "Movie.2020.1080p.BDMV.AVC.DTS-HD.MA", "Movie.2020.DVD9-GRP", "Movie.2020.ISO", "[Movie 2020 BD25]",
+            "Show.S01.COMPLETE.BLURAY.AVC.DTS-HD.MA.5.1-GRP"
+        ).forEach { assertTrue(it, UsenetRelease(it, "url").fullDisc) }
+        listOf("The.Drama.2026.2160p.UHD.Remux.HEVC.DoVi.TrueHD.Atmos.7.1-playBD",
+            "Movie.2020.COMPLETE.BLURAY.REMUX-GRP", "Show.S01.COMPLETE.BluRay.1080p.x264-GRP", "Movie.2020.BDRip.x265",
+            "Movie.2020.Complete.BDRip", "Movie.2020.1080p.BluRay.DTS-HD.MA", "Isolation.2020.1080p", "Show.S01.Complete.DVDRip",
+            // DVD5 here is the encode's target size, not a disc.
+            "Oppenheimer.2023.BluRay.2160p.HDR.MULTi.5.1.AV1.Opus.DVD5-CAV1aR",
+            "Interstellar.2014.Complete.BluRay.1080p.Re-Encode.AVC.DTS-HD.MA.5.1-GRP"
+        ).forEach { assertFalse(it, UsenetRelease(it, "url").fullDisc) }
+        val releases = listOf(UsenetRelease("Disc.COMPLETE.UHD.BLURAY", "https://test/1"),
+            UsenetRelease("Remux.2160p.REMUX", "https://test/2"))
+        val config = UsenetSourceConfiguration(indexers = listOf(indexer))
+        // Discs show by default; the filter hides them.
+        assertEquals(2, NewznabProtocol.arrange(releases, config).size)
+        assertEquals(listOf("Remux.2160p.REMUX"),
+            NewznabProtocol.arrange(releases, config.copy(excludeFullDisc = true)).map { it.title })
+    }
+
+    @Test fun `a whole Blu-ray is labelled by its kind, and nothing else is`() {
+        mapOf(
+            "Movie.2010.COMPLETE.BLURAY-GRP" to "BLU-RAY",
+            "Movie 2010 BD50" to "BLU-RAY",
+            "Movie.2019.COMPLETE.UHD.BLURAY-GRP" to "UHD BLU-RAY",
+            "Movie.2019.2160p.BDMV.HEVC" to "UHD BLU-RAY",
+            "Reservoir.Dogs.1992.1080p.BluRay.DDP5.1.iso" to "BLU-RAY ISO",
+            "Die.Hard.1.1988.4K.UHD.Bluray.Disc.ISO.File-Sixty" to "UHD BLU-RAY ISO",
+        ).forEach { (title, label) -> assertEquals(title, label, UsenetRelease(title, "url").blurayLabel) }
+        // DVDs play no better as discs; encodes and remuxes are single videos.
+        listOf("Movie.2005.COMPLETE.DVD-GRP", "Movie.2005.DVD9-GRP", "Movie.2005.DVD9.ISO",
+            "Movie.2019.2160p.UHD.BluRay.REMUX.HEVC-GRP", "Movie.2019.1080p.BluRay.x264-GRP"
+        ).forEach { assertNull(it, UsenetRelease(it, "url").blurayLabel) }
+    }
+
     @Test fun `entity declarations are rejected without accessing external resources`() {
         assertThrows(IllegalArgumentException::class.java) {
             NewznabProtocol.releases("""<!DOCTYPE rss [<!ENTITY secret SYSTEM "file:///secret">]><rss/>""", indexer)
@@ -256,6 +442,9 @@ class NewznabProtocolTest {
         assertTrue(episode("The Office", "The.Office.US.S01E01.720p"))
         assertTrue(episode("Doctor Who", "Doctor.Who.2005.S01E01.720p"))
         assertFalse(episode("Batman", "The.Batman.S01E01.720p"))
+        // After the episode number comes its own name, which is not the show's.
+        assertFalse(episode("Suits", "Supernoobs.S01E01.Super.Noob.Suits.480p.WEB-DL"))
+        assertTrue(episode("Suits", "Suits.S01E01.Pilot.1080p"))
 
         assertTrue(movie("Money Heist", "La.Casa.de.Papel.2017.1080p", 2017, original = "La casa de papel"))
         assertFalse(movie("Money Heist", "La.Casa.de.Papel.2017.1080p", 2017))
@@ -278,7 +467,104 @@ class NewznabProtocolTest {
         assertFalse(NewznabProtocol.matches(UsenetRelease("A.Show.S01E04.1080p", "url"), series, true))
         assertFalse(NewznabProtocol.matches(UsenetRelease("A.Show.1x04.1080p", "url"), series, true))
         assertTrue(NewznabProtocol.matches(UsenetRelease("A.Show.S01E01-E10", "url"), series, false))
+        // A hyphen spans a range; episodes written one after another are a list of exactly those.
+        fun episode(title: String, number: Int) =
+            NewznabProtocol.matches(UsenetRelease(title, "url"), series.copy(episode = number), true)
+        assertTrue(episode("A.Show.S01E01-05.1080p", 3))
+        assertTrue(episode("A.Show.S01E04E05E06.1080p", 6))
+        assertTrue(episode("A.Show.S01E04E05E06.1080p", 5))
+        assertFalse(episode("A.Show.S01E04E06.1080p", 5))
+        assertTrue(episode("A.Show.S01E04E06.1080p", 6))
+        assertTrue(episode("A.Show.S01E01E02-E04.1080p", 3))
+        assertTrue(episode("A.Show.1x04-06.1080p", 5))
+        assertFalse(episode("A.Show.S01E04-1080p", 5))
         assertTrue(NewznabProtocol.matches(UsenetRelease("A.Show.S01.Complete", "url"), series, false))
         assertFalse(NewznabProtocol.matches(UsenetRelease("A.Show.S02.Complete", "url"), series, true))
+    }
+
+    private fun seriesKept(show: UsenetSearchRequest, vararg names: String) =
+        NewznabProtocol.seriesResultsOf(show, names.map { UsenetRelease(it, it) }).map { it.title }
+
+    @Test fun `a series' results named with another series' year are dropped`() {
+        // The Korean Suits (2018) shares its name with the American one (2011).
+        val korean = UsenetSearchRequest(title = "Suits", year = 2018, seasonYear = 2018, series = true, season = 1, episode = 2)
+        val names = arrayOf("Suits.2018.S01E02.1080p.NF.WEB-DL.H.264-TSRG",
+            "Suits.S01E02.2011.1080p.Netflix.WEB-DL.AVC.DDP.5.1-DBTV",
+            "Suits (2011) S01E02 1080p BluRay x265 10bit HEVC",
+            "Suits.2011.S01E02.1080p.NF.WEBRip.H.264-PTerWEB",
+            "Suits 2011 1x02 Errores Y Omisiones Micro-HD",
+            "Suits.S01E02.1080p.BluRay.H264-GERUDO",
+            "8f3a2c1d9e7b6a5f4e3d2c1b")
+        assertEquals(listOf("Suits.2018.S01E02.1080p.NF.WEB-DL.H.264-TSRG", "Suits.S01E02.1080p.BluRay.H264-GERUDO",
+            "8f3a2c1d9e7b6a5f4e3d2c1b"), seriesKept(korean, *names))
+        // Without the series' year every name passes.
+        assertEquals(names.toList(), seriesKept(korean.copy(year = null), *names))
+
+        // A later season is named with the series' first year or the season's, within one.
+        val american = UsenetSearchRequest(title = "Suits", year = 2011, seasonYear = 2019, series = true, season = 9, episode = 1)
+        assertEquals(listOf("Suits.2011.S09E01.1080p", "Suits.S09E01.2019.1080p", "Suits.S09E01.2020.720p"),
+            seriesKept(american, "Suits.2011.S09E01.1080p", "Suits.S09E01.2019.1080p", "Suits.S09E01.2020.720p", "Suits.2015.S09E01.1080p"))
+        // With the season's year unknown, any year of the series' run.
+        val unknownSeason = american.copy(seasonYear = null, lastYear = 2019)
+        assertEquals(listOf("Suits.2016.S09E01.1080p"), seriesKept(unknownSeason, "Suits.2016.S09E01.1080p", "Suits.2022.S09E01.1080p"))
+    }
+
+    @Test fun `title words, dates and spans of years are not a series' year`() {
+        val show = UsenetSearchRequest(title = "1923", year = 2022, seasonYear = 2022, series = true, season = 1, episode = 1)
+        assertEquals(listOf("1923.S01E01.1080p.WEB", "1923.2022.S01E01.720p"),
+            seriesKept(show, "1923.S01E01.1080p.WEB", "1923.2022.S01E01.720p", "1923.2019.S01E01.720p"))
+        // A daily show's date is the day an episode aired, and a span of years in a pack is no one year.
+        val daily = UsenetSearchRequest(title = "The Daily Show", year = 1996, seasonYear = 1996, series = true, season = 29, episode = 50)
+        assertEquals(2, seriesKept(daily, "The.Daily.Show.2024.05.12.Guest.720p.WEB", "The.Daily.Show.S29.2020-2024.1080p").size)
+        // A pack of several seasons may carry any of their years.
+        assertEquals(1, seriesKept(show.copy(year = 2011, seasonYear = 2011), "Show.S01-S03.2013.1080p").size)
+    }
+
+    @Test fun `a series' results with another country's tag are dropped when a series of its name is known`() {
+        val uk = UsenetSearchRequest(title = "The Office", year = 2001, seasonYear = 2001, countries = setOf("GB"),
+            namesakes = listOf(UsenetNamesake(2005, setOf("US"), 5765)), series = true, season = 1, episode = 1)
+        assertEquals(listOf("The.Office.UK.S01E01.720p", "The.Office.S01E01.1080p.BluRay"),
+            seriesKept(uk, "The.Office.US.S01E01.720p", "The.Office.UK.S01E01.720p", "The.Office.S01E01.1080p.BluRay"))
+        // Without a known series of its name a country tag says nothing; "us" in the title is no tag.
+        assertEquals(1, seriesKept(uk.copy(namesakes = null), "The.Office.US.S01E01.720p").size)
+        assertEquals(1, seriesKept(UsenetSearchRequest(title = "This Is Us", year = 2016, seasonYear = 2016, countries = setOf("US"),
+            namesakes = listOf(UsenetNamesake(2020, setOf("GB"), 50)), series = true, season = 1, episode = 1),
+            "This.Is.Us.S01E01.1080p").size)
+    }
+
+    @Test fun `a newer series' bare names are another's once one is named with its year or country`() {
+        val older = UsenetNamesake(2011, setOf("US"), 6055)
+        val korean = UsenetSearchRequest(title = "Suits", year = 2018, seasonYear = 2018, countries = setOf("KR"), votes = 24,
+            namesakes = listOf(older, UsenetNamesake(2018, setOf("JP"), 11)), series = true, season = 1, episode = 2)
+        fun kept(show: UsenetSearchRequest, vararg names: String) =
+            NewznabProtocol.withoutNamesakeReleases(show, names.map { UsenetRelease(it, it) }).map { it.title }
+        val names = arrayOf("Suits.2018.S01E02.1080p.NF.WEB-DL-TSRG", "Suits.S01E02.1080p.BluRay.H264-GERUDO",
+            "Suits - S01E02 - Errors and Omissions - Bluray-720p", "8f3a2c1d9e7b6a5f4e3d2c1b", "Pearson.S01E02.1080p")
+        assertEquals(listOf("Suits.2018.S01E02.1080p.NF.WEB-DL-TSRG", "8f3a2c1d9e7b6a5f4e3d2c1b", "Pearson.S01E02.1080p"),
+            kept(korean, *names))
+        // Never emptied: without a release named with its year, the bare names stay.
+        assertEquals(names.size - 1, kept(korean, *names.drop(1).toTypedArray()).size)
+        // A year after the episode number is often the year it aired: a fitting one keeps its release,
+        // but does not name the series.
+        assertEquals(names.size, kept(korean, "Suits.S01E02.2018.1080p.WEB", *names.drop(1).toTypedArray()).size)
+        assertEquals(4, kept(korean, *names, "Suits.S01E02.2018.1080p.WEB").size)
+        // The older series counts only when it is by far the better known, and known enough.
+        assertEquals(names.size, kept(korean.copy(namesakes = listOf(older.copy(votes = 9))), *names).size)
+        assertEquals(names.size, kept(korean.copy(votes = 606), *names).size)
+        assertEquals(3, kept(korean.copy(votes = 605), *names).size)
+        assertEquals(names.size, kept(korean.copy(votes = null), *names).size)
+        // The older series' own names are never touched by it.
+        assertEquals(names.size, kept(korean.copy(year = 2011, votes = 6055, namesakes = listOf(UsenetNamesake(2018, setOf("KR"), 24))), *names).size)
+        // A country tag names a series as well as a year does.
+        val us = UsenetSearchRequest(title = "The Office", year = 2005, seasonYear = 2005, countries = setOf("US"), votes = 100,
+            namesakes = listOf(UsenetNamesake(2001, setOf("GB"), 1030)), series = true, season = 2, episode = 1)
+        assertEquals(listOf("The.Office.US.S02E01.720p"), kept(us, "The.Office.US.S02E01.720p", "The.Office.S02E01.720p"))
+    }
+
+    @Test fun `names are compared as releases spell them`() {
+        assertTrue(NewznabProtocol.sameName("Marvel's Daredevil", "Marvels Daredevil"))
+        assertTrue(NewznabProtocol.sameName("SUITS", "Suits"))
+        assertFalse(NewznabProtocol.sameName("Suits LA", "Suits"))
+        assertFalse(NewznabProtocol.sameName(null, "Suits"))
     }
 }

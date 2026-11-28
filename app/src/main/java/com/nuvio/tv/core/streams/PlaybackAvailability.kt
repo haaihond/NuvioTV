@@ -1,18 +1,22 @@
 package com.nuvio.tv.core.streams
 
+import com.nuvio.tv.core.usenet.builtInUsenetCanSearch
 import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.Meta
 import com.nuvio.tv.domain.model.ScraperInfo
 import com.nuvio.tv.domain.model.Video
 
 internal fun Addon.supportsStreamResource(type: String, videoId: String): Boolean =
+    supportsResource("stream", type, videoId)
+
+internal fun Addon.supportsResource(name: String, type: String, id: String): Boolean =
     resources.any { resource ->
-        resource.name == "stream" &&
+        resource.name == name &&
             (resource.types.isEmpty() || resource.types.contains(type)) &&
             run {
                 val prefixes = resource.idPrefixes?.takeIf { it.isNotEmpty() }
                     ?: idPrefixes.takeIf { it.isNotEmpty() }
-                prefixes == null || prefixes.any { videoId.startsWith(it) }
+                prefixes == null || prefixes.any { id.startsWith(it) }
             }
     }
 
@@ -20,7 +24,10 @@ internal data class PlaybackAvailability(
     val addons: List<Addon> = emptyList(),
     val scrapers: List<ScraperInfo> = emptyList(),
     val isLoaded: Boolean = false,
-    private val cachedMeta: (String, String) -> Meta? = { _, _ -> null }
+    /** True when the built-in Usenet sources are enabled and have a provider and an indexer. */
+    val usenetReady: Boolean = false,
+    private val cachedMeta: (String, String) -> Meta? = { _, _ -> null },
+    private val serverStreams: (String, String) -> Boolean = { _, _ -> false }
 ) {
     fun canStream(
         type: String,
@@ -30,5 +37,8 @@ internal data class PlaybackAvailability(
     ): Boolean = video?.takeIf { it.id == videoId }?.streams?.isNotEmpty() == true ||
         cachedMeta(type, contentId)?.videos?.any { it.id == videoId && it.streams.isNotEmpty() } == true ||
         addons.any { it.enabled && it.supportsStreamResource(type, videoId) } ||
-        scrapers.any { it.enabled && it.supportsType(type) }
+        scrapers.any { it.enabled && it.supportsType(type) } ||
+        // Built-in sources are searched on play, so a title can play even with no addon installed.
+        (usenetReady && builtInUsenetCanSearch(type, videoId)) ||
+        serverStreams(type, videoId)
 }

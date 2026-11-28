@@ -27,6 +27,7 @@ class UsenetSettingsTest {
         every { editor.putString(any(), any()) } answers { values[firstArg()] = secondArg<String>(); editor }
         every { editor.putInt(any(), any()) } answers { values[firstArg()] = secondArg<Int>(); editor }
         every { editor.putBoolean(any(), any()) } answers { values[firstArg()] = secondArg<Boolean>(); editor }
+        every { editor.remove(any()) } answers { values.remove(firstArg<String>()); editor }
         every { editor.apply() } returns Unit
 
         mockkObject(UsenetSidecar.Companion)
@@ -96,6 +97,24 @@ class UsenetSettingsTest {
             settings.update(settings.settings.value.copy(fallbackEnabled = false))
             assertFalse(settings.settings.value.fallbackEnabled)
             assertFalse(UsenetSettings(context).settings.value.fallbackEnabled)
+
+            // Only a User-Agent the user chose is stored: Nuvio's own stays automatic and follows app updates.
+            assertEquals(NUVIO_USER_AGENT, settings.settings.value.searchAgent)
+            assertEquals(NUVIO_USER_AGENT, settings.settings.value.downloadAgent)
+            settings.update(settings.settings.value.copy(searchUserAgent = "MyClient/1.0", downloadUserAgent = "Downloader/2.0"))
+            assertEquals("MyClient/1.0", UsenetSettings(context).settings.value.searchAgent)
+            assertEquals("Downloader/2.0", UsenetSettings(context).settings.value.downloadAgent)
+            settings.update(settings.settings.value.copy(searchUserAgent = " $NUVIO_USER_AGENT "))
+            assertEquals("", UsenetSettings(context).settings.value.searchUserAgent)
+            assertEquals("Downloader/2.0", UsenetSettings(context).settings.value.downloadAgent)
+            assertThrows(IllegalArgumentException::class.java) {
+                settings.update(settings.settings.value.copy(searchUserAgent = "a\r\nb: c"))
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                settings.update(settings.settings.value.copy(downloadUserAgent = "a\r\nb: c"))
+            }
+            values["downloadUserAgent"] = "Nüvio"
+            assertEquals(NUVIO_USER_AGENT, UsenetSettings.read(context).downloadAgent)
         } finally {
             unmockkObject(UsenetSidecar.Companion)
         }

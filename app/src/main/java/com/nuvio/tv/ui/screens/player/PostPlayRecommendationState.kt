@@ -79,12 +79,15 @@ internal fun PlayerUiState.blocksPostPlayRecommendation(): Boolean {
         showStreamInfoOverlay ||
         showEpisodesPanel ||
         showSourcesPanel ||
+        showChaptersPanel ||
+        showPartyPanel ||
         showAudioOverlay ||
         showSubtitleOverlay ||
         showSubtitleStylePanel ||
         showSubtitleDelayOverlay ||
         showSubtitleTimingDialog ||
         showSpeedDialog ||
+        showDiscTitlesDialog ||
         showMoreDialog
 }
 

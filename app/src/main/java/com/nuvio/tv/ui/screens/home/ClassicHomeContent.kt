@@ -101,6 +101,7 @@ fun ClassicHomeContent(
     onNavigateToCatalogSeeAll: (String, String, String) -> Unit,
     onNavigateToFolderDetail: (String, String) -> Unit = { _, _ -> },
     onRemoveContinueWatching: (String, Int?, Int?, Boolean) -> Unit,
+    onMarkContinueWatchingWatched: (ContinueWatchingItem) -> Unit = {},
     isCatalogItemWatched: (MetaPreview) -> Boolean = { false },
     onCatalogItemLongPress: (MetaPreview, String) -> Unit = { _, _ -> },
     onRequestTrailerPreview: (MetaPreview) -> Unit,
@@ -603,6 +604,7 @@ fun ClassicHomeContent(
                     showImdbRatings = uiState.homeImdbRatingsVisibility.showRatings,
                     mdbListShowOnHero = uiState.mdbListShowOnHero,
                     mdbListRatingOrder = uiState.mdbListRatingOrder,
+                    descriptionAutoScrollEnabled = uiState.heroDescriptionAutoScrollEnabled,
                     onActiveItemChanged = { item ->
                         activeHeroItem = item
                         val idx = uiState.heroItems.indexOfFirst { it.id == item.id }
@@ -632,9 +634,15 @@ fun ClassicHomeContent(
                     }
                 }
                 ContinueWatchingSection(
-                    items = uiState.continueWatchingItems.withCustomPosterUrls(
-                        com.nuvio.tv.core.poster.patternForScreen(uiState.customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
-                    ),
+                    items = remember(
+                        uiState.continueWatchingItems,
+                        uiState.customPosterUrlPattern,
+                        uiState.customPosterEnabledScreens,
+                    ) {
+                        uiState.continueWatchingItems.withCustomPosterUrls(
+                            com.nuvio.tv.core.poster.patternForScreen(uiState.customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
+                        )
+                    },
                     onItemClick = { item ->
                         onContinueWatchingClick(item)
                     },
@@ -654,6 +662,7 @@ fun ClassicHomeContent(
                             ""
                         )
                     },
+                    onMarkWatched = onMarkContinueWatchingWatched,
                     onRemoveItem = { item ->
                         val contentId = when (item) {
                             is ContinueWatchingItem.InProgress -> item.progress.contentId
@@ -712,9 +721,15 @@ fun ClassicHomeContent(
                     }
                 }
                 ContinueWatchingSection(
-                    items = uiState.upcomingItems.withCustomPosterUrls(
-                        com.nuvio.tv.core.poster.patternForScreen(uiState.customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
-                    ),
+                    items = remember(
+                        uiState.upcomingItems,
+                        uiState.customPosterUrlPattern,
+                        uiState.customPosterEnabledScreens,
+                    ) {
+                        uiState.upcomingItems.withCustomPosterUrls(
+                            com.nuvio.tv.core.poster.patternForScreen(uiState.customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
+                        )
+                    },
                     title = stringResource(R.string.upcoming_section_title),
                     onItemClick = { item ->
                         onContinueWatchingClick(item)
@@ -735,6 +750,7 @@ fun ClassicHomeContent(
                             ""
                         )
                     },
+                    onMarkWatched = onMarkContinueWatchingWatched,
                     onRemoveItem = { item ->
                         val contentId = when (item) {
                             is ContinueWatchingItem.InProgress -> item.progress.contentId

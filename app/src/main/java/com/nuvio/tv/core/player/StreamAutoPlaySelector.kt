@@ -1,18 +1,26 @@
 package com.nuvio.tv.core.player
 
 import com.nuvio.tv.core.build.AppFeaturePolicy
+import com.nuvio.tv.core.usenet.BuiltInUsenetService
 import com.nuvio.tv.data.local.StreamAutoPlayMode
 import com.nuvio.tv.data.local.StreamAutoPlaySource
 import com.nuvio.tv.domain.model.AddonStreams
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamDebridCacheState
+import com.nuvio.tv.domain.model.indexOfPluginBingeMatch
+import com.nuvio.tv.domain.model.scraperIdFromPluginBingeGroup
 
 object StreamAutoPlaySelector {
     fun orderAddonStreams(
         streams: List<AddonStreams>,
-        installedOrder: List<String>
+        installedOrder: List<String>,
+        preferredNames: Set<String> = emptySet()
     ): List<AddonStreams> {
         if (streams.isEmpty()) return streams
+        if (preferredNames.isNotEmpty()) {
+            val (preferred, rest) = streams.partition { it.addonName in preferredNames }
+            return preferred + orderAddonStreams(rest, installedOrder)
+        }
 
         val addonRankByName = HashMap<String, Int>(installedOrder.size)
         installedOrder.forEachIndexed { index, addonName ->
@@ -33,6 +41,7 @@ object StreamAutoPlaySelector {
     private fun isPlayable(stream: Stream): Boolean {
         // External URL streams (e.g. error pages, web links) are not playable.
         if (stream.isExternal()) return false
+        if (stream.serverTarget != null) return true
         // Streams with a direct URL are always playable regardless of debrid cache status.
         if (stream.getStreamUrl() != null) return true
         when (stream.debridCacheStatus?.state) {
@@ -50,7 +59,41 @@ object StreamAutoPlaySelector {
             (AppFeaturePolicy.inAppTrailerPlaybackEnabled && stream.youTubeIdToResolve() != null)
     }
 
+    /**
+     * Exact binge group for addons. For a local plugin, the stream whose identity tokens
+     * still match after the next episode's own shared words are removed.
+     * Only playable streams are considered, matching the autoplay selector.
+     */
+    fun selectBingeGroupMatch(streams: List<Stream>, targetBingeGroup: String): Stream? {
+        if (targetBingeGroup.isBlank()) return null
+        val playableStreams = streams.filter { !it.isExternal() && isPlayable(it) }
+        if (playableStreams.isEmpty()) return null
 
+        val exact = playableStreams.firstOrNull { it.behaviorHints?.bingeGroup == targetBingeGroup }
+        if (exact != null) return exact
+        if (scraperIdFromPluginBingeGroup(targetBingeGroup) == null) return null
+
+        val index = indexOfPluginBingeMatch(
+            targetBingeGroup,
+            playableStreams.map { it.behaviorHints?.bingeGroup }
+        )
+        return index?.let { playableStreams[it] }
+    }
+
+    /**
+     * Filename and info-hash binge matches run as soon as a stream arrives, before a
+     * torrent's debrid check finishes. Addon groups stay an exact string and are not
+     * required to be playable yet. Plugin groups fall back to identity tokens, and
+     * that fallback only considers streams that are already playable.
+     */
+    fun selectEarlyBingeGroupMatch(streams: List<Stream>, targetBingeGroup: String): Stream? {
+        if (targetBingeGroup.isBlank()) return null
+        val visible = streams.filter { !it.isExternal() }
+        val exact = visible.firstOrNull { it.behaviorHints?.bingeGroup == targetBingeGroup }
+        if (exact != null) return exact
+        if (scraperIdFromPluginBingeGroup(targetBingeGroup) == null) return null
+        return selectBingeGroupMatch(visible, targetBingeGroup)
+    }
 
     fun selectAutoPlayStream(
         streams: List<Stream>,
@@ -72,32 +115,31 @@ object StreamAutoPlaySelector {
             source
         }
 
+        // Built-in Usenet is a source the user set up like an addon, not a plugin.
+        fun isAddonStream(stream: Stream) =
+            stream.addonName in installedAddonNames || stream.addonName == BuiltInUsenetService.GROUP_NAME
         val sourceScopedStreams = when (effectiveSource) {
             StreamAutoPlaySource.ALL_SOURCES -> streams
-            StreamAutoPlaySource.INSTALLED_ADDONS_ONLY -> streams.filter { it.addonName in installedAddonNames }
-            StreamAutoPlaySource.ENABLED_PLUGINS_ONLY -> streams.filter { it.addonName !in installedAddonNames }
+            StreamAutoPlaySource.INSTALLED_ADDONS_ONLY -> streams.filter { it.serverTarget != null || isAddonStream(it) }
+            StreamAutoPlaySource.ENABLED_PLUGINS_ONLY -> streams.filter { !isAddonStream(it) }
         }
         val candidateStreams = sourceScopedStreams.filter { stream ->
-            val isAddonStream = stream.addonName in installedAddonNames
-            if (isAddonStream) {
+            if (stream.serverTarget != null) {
+                true
+            } else if (isAddonStream(stream)) {
                 selectedAddons.isEmpty() || stream.addonName in selectedAddons
             } else {
                 selectedPlugins.isEmpty() || stream.addonName in selectedPlugins
             }
         }
-        if (candidateStreams.isEmpty()) return null
-
         // Binge group matching takes priority over mode and source filters — even in MANUAL mode,
         // a persisted binge group should auto-play without showing the picker.
         // Search ALL streams, not just candidateStreams, since binge group reuse should
-        // not be limited by autoplay source/addon selection filters.
+        // not be limited by autoplay source/addon selection filters. An installed-addons-only
+        // filter would otherwise drop a plugin result set and open the sidebar.
         val targetBingeGroup = preferredBingeGroup?.trim().orEmpty()
         if (preferBingeGroupInSelection && targetBingeGroup.isNotEmpty()) {
-            val bingeGroupMatch = streams.firstOrNull { stream ->
-                !stream.isExternal() &&
-                    stream.behaviorHints?.bingeGroup == targetBingeGroup &&
-                    isPlayable(stream)
-            }
+            val bingeGroupMatch = selectBingeGroupMatch(streams, targetBingeGroup)
             if (bingeGroupMatch != null) return bingeGroupMatch
             // When bingeGroupOnly is set (MANUAL mode with only binge-group
             // preference enabled), don't fall back to a non-matching stream —
@@ -107,6 +149,8 @@ object StreamAutoPlaySelector {
 
         if (bingeGroupOnly) return null
 
+        if (candidateStreams.isEmpty()) return null
+
         if (mode == StreamAutoPlayMode.MANUAL) return null
 
         return when (mode) {
@@ -114,7 +158,7 @@ object StreamAutoPlaySelector {
             StreamAutoPlayMode.FIRST_STREAM -> candidateStreams.firstOrNull { isPlayable(it) }
             StreamAutoPlayMode.REGEX_MATCH -> {
                 val pattern = regexPattern.trim()
- 
+
                 // Try to compile the user regex
                 val userRegex = runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrNull()
                 if (userRegex == null) return null

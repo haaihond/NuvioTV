@@ -3,6 +3,8 @@ package com.nuvio.tv.core.server
 import android.content.Context
 import android.content.res.Configuration
 import com.nuvio.tv.R
+import com.nuvio.tv.core.usenet.DEFAULT_API_PATH
+import com.nuvio.tv.core.usenet.UsenetSourceConfiguration
 import java.util.Locale
 
 object UsenetSourcesWebPage {
@@ -26,6 +28,14 @@ object UsenetSourcesWebPage {
             }
             """<option value="$p">${label.html()}</option>"""
         }
+        val fetchLimits = (listOf(-1, 0) + UsenetSourceConfiguration.INDEXER_RESULT_CHOICES).joinToString("") { limit ->
+            val label = when (limit) {
+                -1 -> s(R.string.usenet_fetch_default)
+                0 -> s(R.string.usenet_fetch_unlimited)
+                else -> limit.toString()
+            }
+            """<option value="$limit">$label</option>"""
+        }
         return """
 <!DOCTYPE html>
 <html>
@@ -42,7 +52,7 @@ object UsenetSourcesWebPage {
   .header img { height: 36px; margin-bottom: 0.5rem; filter: brightness(0) invert(1); opacity: 0.9; }
   .header p { font-size: 0.875rem; font-weight: 300; color: rgba(255,255,255,0.4); }
   .intro { color: rgba(255,255,255,0.5); font-size: 0.875rem; font-weight: 300; margin-bottom: 2rem; }
-  .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 1.5rem; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 1.5rem; }
   .tab { border: 1px solid rgba(255,255,255,0.12); border-radius: 999px; background: transparent; color: rgba(255,255,255,0.58);
     font: inherit; font-size: 0.875rem; font-weight: 600; padding: 0.8rem 1rem; }
   .tab.active { background: #fff; border-color: #fff; color: #000; }
@@ -73,6 +83,7 @@ object UsenetSourcesWebPage {
   .add { width: 100%; margin-top: 0.4rem; }
   .status { min-height: 1.5rem; margin-top: 1rem; font-size: 0.875rem; text-align: center; color: rgba(135,239,172,0.95); }
   .status.error { color: rgba(207,102,121,0.95); }
+${UsenetRankingWebPage.style}
 </style>
 </head>
 <body>
@@ -85,6 +96,7 @@ object UsenetSourcesWebPage {
   <div class="tabs">
     <button class="tab active" type="button" data-tab="providers">${s(R.string.usenet_phone_providers)}</button>
     <button class="tab" type="button" data-tab="indexers">${s(R.string.usenet_phone_indexers)}</button>
+    <button class="tab" type="button" data-tab="ranking">${s(R.string.usenet_ranking_tab)}</button>
   </div>
 
   <div id="panel-providers">
@@ -125,9 +137,14 @@ object UsenetSourcesWebPage {
       <label for="iName">${s(R.string.usenet_source_name)}</label>
       <input id="iName" required>
       <label for="iUrl">${s(R.string.usenet_indexer_url)}</label>
-      <input id="iUrl" type="url" autocapitalize="none" spellcheck="false" placeholder="https://indexer.example/api" required>
+      <input id="iUrl" type="url" autocapitalize="none" spellcheck="false" placeholder="https://indexer.example" required>
+      <label for="iPath">${s(R.string.usenet_indexer_api_path)}</label>
+      <input id="iPath" autocapitalize="none" spellcheck="false" placeholder="/api">
       <label for="iKey">${s(R.string.usenet_indexer_key)}</label>
       <input id="iKey" type="password" autocomplete="new-password" autocapitalize="none" spellcheck="false">
+      <label for="iFetchLimit">${s(R.string.usenet_fetch_limit)}</label>
+      <select id="iFetchLimit">$fetchLimits</select>
+      <div class="hint">${s(R.string.usenet_fetch_limit_description)}</div>
       <label for="iPriority">${s(R.string.usenet_priority)}</label>
       <select id="iPriority">$priorities</select>
       <div class="hint">${s(R.string.usenet_indexer_priority_hint)}</div>
@@ -146,11 +163,13 @@ object UsenetSourcesWebPage {
     </form>
   </div>
 
+${UsenetRankingWebPage.panel(context)}
   <div class="status" id="status"></div>
 </div>
 <script>
 // Keep the token out of the address bar, history and any shared screenshot; the tab still survives a reload.
 let token = new URLSearchParams(location.search).get('t');
+const addOnOpen = new URLSearchParams(location.search).get('${UsenetSourcesConfigServer.ADD_PARAM}');
 try {
   if (token) sessionStorage.setItem('t', token); else token = sessionStorage.getItem('t');
   history.replaceState(null, '', '/');
@@ -189,7 +208,7 @@ function render() {
     '</span></button>').join('') : '<div class="empty">${js(R.string.usenet_phone_none)}</div>';
   $('indexerList').innerHTML = sources.indexers.length ? sources.indexers.map((x, i) =>
     '<button class="item" type="button" data-indexer="' + i + '"><b>' + escapeHtml(x.name) + '</b><span>' +
-    escapeHtml(x.apiUrl.split('?')[0]) + ' • ' + priorityText(x.priority) + ' • ' + state(x.enabled) +
+    escapeHtml((x.endpoint || x.apiUrl).split('?')[0]) + ' • ' + priorityText(x.priority) + ' • ' + state(x.enabled) +
     '</span></button>').join('') : '<div class="empty">${js(R.string.usenet_phone_none)}</div>';
   document.querySelectorAll('[data-provider]').forEach(b => b.onclick = () => openProvider(sources.providers[b.dataset.provider]));
   document.querySelectorAll('[data-indexer]').forEach(b => b.onclick = () => openIndexer(sources.indexers[b.dataset.indexer]));
@@ -197,6 +216,7 @@ function render() {
 async function load() {
   sources = await api('/api/sources');
   render();
+  await loadRanking();
 }
 function secretHint(input, saved) {
   input.value = '';
@@ -222,8 +242,10 @@ function openIndexer(x) {
   $('indexerTitle').textContent = x ? '${js(R.string.usenet_edit_indexer)}' : '${js(R.string.usenet_add_indexer)}';
   $('iName').value = x ? x.name : '';
   $('iUrl').value = x ? x.apiUrl : '';
+  $('iPath').value = x ? (x.apiPath || '') : '${DEFAULT_API_PATH}';
   secretHint($('iKey'), x && x.hasKey);
   $('iPriority').value = x ? x.priority : 1;
+  $('iFetchLimit').value = x ? (x.fetchResultsLimit ?? -1) : -1;
   $('iSearchMode').value = x?.searchMode || 'AUTO';
   $('indexerForm').classList.add('open');
   setStatus('');
@@ -235,8 +257,8 @@ function providerValue() {
     password: $('pPassword').value, priority: parseInt($('pPriority').value, 10) };
 }
 function indexerValue() {
-  return { id: editing.indexer, name: $('iName').value, apiUrl: $('iUrl').value, apiKey: $('iKey').value,
-    priority: parseInt($('iPriority').value, 10), searchMode: $('iSearchMode').value };
+  return { id: editing.indexer, name: $('iName').value, apiUrl: $('iUrl').value, apiPath: $('iPath').value, apiKey: $('iKey').value,
+    priority: parseInt($('iPriority').value, 10), searchMode: $('iSearchMode').value, fetchResultsLimit: parseInt($('iFetchLimit').value, 10) };
 }
 async function run(button, pending, action) {
   button.disabled = true;
@@ -282,9 +304,15 @@ document.querySelectorAll('.tab').forEach(tab => tab.onclick = () => {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
   $('panel-providers').hidden = tab.dataset.tab !== 'providers';
   $('panel-indexers').hidden = tab.dataset.tab !== 'indexers';
+  $('panel-ranking').hidden = tab.dataset.tab !== 'ranking';
   setStatus('');
 });
-load().catch(e => setStatus(e.message, true));
+${UsenetRankingWebPage.script(context)}
+load().then(() => {
+  if (addOnOpen === '${UsenetSourcesConfigServer.ADD_PROVIDER}') openProvider(null);
+  if (addOnOpen === '${UsenetSourcesConfigServer.ADD_INDEXER}') { document.querySelector('.tab[data-tab="indexers"]').click(); openIndexer(null); }
+  if (addOnOpen === '${UsenetSourcesConfigServer.OPEN_RANKING}') document.querySelector('.tab[data-tab="ranking"]').click();
+}).catch(e => setStatus(e.message, true));
 </script>
 </body>
 </html>

@@ -1,8 +1,11 @@
 package com.nuvio.tv.core.di
 
 import com.nuvio.tv.BuildConfig
+import com.nuvio.tv.core.network.NoDelaySocketFactory
 import com.nuvio.tv.core.profile.ProfileScopedCredentialStore
 import com.nuvio.tv.core.profile.ProfileManager
+import com.nuvio.tv.core.tracking.TrackingProviderId
+import com.nuvio.tv.data.local.TraktSettingsDataStore
 import com.nuvio.tv.data.local.ProfileDataStore
 import com.nuvio.tv.data.mdblist.AndroidMdbListAuthPersistence
 import com.nuvio.tv.data.mdblist.AndroidMdbListSyncStorage
@@ -52,6 +55,7 @@ object MdbListModule {
     fun http(configuration: MdbListConfiguration): MdbListHttpClient = MdbListHttpClient(
         OkHttpMdbListEngine(
             OkHttpClient.Builder()
+                .socketFactory(NoDelaySocketFactory)
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .callTimeout(45, TimeUnit.SECONDS)
@@ -90,9 +94,11 @@ object MdbListModule {
         storage: AndroidMdbListSyncStorage,
         auth: MdbListAuthStore,
         api: MdbListApiClient,
-        profiles: ProfileManager
+        profiles: ProfileManager,
+        settings: TraktSettingsDataStore
     ) = MdbListSyncRepository(
         storage, auth, api, profiles.activeProfileId,
-        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        ratingsEnabled = { settings.ratingSource.value == TrackingProviderId.MDBLIST }
     )
 }
